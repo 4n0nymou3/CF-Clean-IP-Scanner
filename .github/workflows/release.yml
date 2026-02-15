@@ -1,0 +1,80 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.0)'
+        required: true
+        default: '1.0.0'
+      prerelease:
+        description: 'Is this a pre-release?'
+        required: true
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+        default: 'false'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+    
+    - name: Get dependencies
+      run: go mod download
+    
+    - name: Build for Android ARM64
+      run: |
+        GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o cf-scanner
+    
+    - name: Create zip file
+      run: |
+        zip cf-scanner-arm64.zip cf-scanner
+    
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ github.event.inputs.version }}
+        release_name: Version ${{ github.event.inputs.version }}
+        body: |
+          Cloudflare Clean IP Scanner - Version ${{ github.event.inputs.version }}
+          
+          Optimized for Termux Android ARM64
+          
+          Installation:
+          ```bash
+          wget https://github.com/${{ github.repository }}/releases/download/v${{ github.event.inputs.version }}/cf-scanner-arm64.zip
+          unzip cf-scanner-arm64.zip
+          chmod +x cf-scanner
+          ./cf-scanner
+          ```
+          
+          Features:
+          - Fast IP scanning
+          - Beautiful colored output
+          - Automatic result saving
+          - Simple one-command usage
+        draft: false
+        prerelease: ${{ github.event.inputs.prerelease }}
+    
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./cf-scanner-arm64.zip
+        asset_name: cf-scanner-arm64.zip
+        asset_content_type: application/zip
