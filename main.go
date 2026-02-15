@@ -61,7 +61,7 @@ func main() {
 	}
 	
 	fmt.Println()
-	cyan := color.New(color.FgCyan, color.Bold)
+	cyan = color.New(color.FgCyan, color.Bold)
 	cyan.Println("========================================")
 	cyan.Println("     Scan completed successfully!")
 	cyan.Println("========================================")
