@@ -33,6 +33,7 @@ jobs:
       run: |
         go mod download
         go mod tidy
+        go get github.com/fatih/color@v1.16.0
     
     - name: Build for Android ARM64
       run: |
