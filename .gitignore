@@ -3,3 +3,4 @@ clean_ips.txt
 cf-scanner
 cf-scanner-*
 *.zip
+go.sum
