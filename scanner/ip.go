@@ -54,12 +54,15 @@ func generateRandomIP(baseIP net.IP, ipNet *net.IPNet) net.IP {
 	ip := make(net.IP, len(baseIP))
 	copy(ip, baseIP)
 	
-	for i := 0; i < len(ip); i++ {
+	maskLen := len(ipNet.Mask)
+	offset := len(ip) - maskLen
+	
+	for i := 0; i < maskLen; i++ {
 		if ipNet.Mask[i] == 0 {
-			ip[i] = byte(rand.Intn(256))
+			ip[offset+i] = byte(rand.Intn(256))
 		} else if ipNet.Mask[i] != 255 {
 			hostBits := 255 ^ ipNet.Mask[i]
-			ip[i] = (baseIP[i] & ipNet.Mask[i]) | byte(rand.Intn(int(hostBits)+1))
+			ip[offset+i] = (baseIP[offset+i] & ipNet.Mask[i]) | byte(rand.Intn(int(hostBits)+1))
 		}
 	}
 	
