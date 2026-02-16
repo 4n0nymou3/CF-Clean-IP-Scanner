@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g., 1.0.0)'
+        description: 'Release version (e.g., 1.2.0)'
         required: true
         type: string
       prerelease:
@@ -24,32 +24,23 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Set up Zig
-      uses: goto-bus-stop/setup-zig@v2
-      with:
-        version: 0.11.0
-    
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.25.x'
+        go-version: '1.23.x'
     
     - name: Get dependencies
       run: |
         go mod download
         go mod tidy
-        go get github.com/fatih/color@v1.16.0
-        go get github.com/VividCortex/ewma@v1.2.0
     
-    - name: Build for Android ARM64 with Zig
+    - name: Build for Android ARM64
       run: |
-        CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-musl" CXX="zig c++ -target aarch64-linux-musl" go build -trimpath -ldflags="-s -w -linkmode=external -extldflags=-static-pie" -o cf-scanner
+        CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o cf-scanner
     
     - name: Verify build
       run: |
         file cf-scanner
-        readelf -h cf-scanner | grep "Type:"
-        readelf -l cf-scanner | grep "TLS" -A 2 || echo "No TLS segment"
         ls -lh cf-scanner
     
     - name: Create zip file
@@ -69,27 +60,35 @@ jobs:
           
           **Cloudflare Clean IP Scanner for Termux (Android ARM64)**
           
-          ### Installation
-          
-          Run this command in Termux:
+          ### Installation Method 1: Direct Download (Recommended for most users)
           
           ```bash
-          pkg install wget unzip && wget https://github.com/${{ github.repository }}/releases/download/v${{ github.event.inputs.version }}/cf-scanner-arm64.zip && unzip cf-scanner-arm64.zip && chmod +x cf-scanner
+          pkg update && pkg upgrade && pkg install wget unzip
+          wget https://github.com/${{ github.repository }}/releases/download/v${{ github.event.inputs.version }}/cf-scanner-arm64.zip
+          unzip cf-scanner-arm64.zip
+          chmod +x cf-scanner
+          ./cf-scanner
+          ```
+          
+          ### Installation Method 2: Build from Source (If method 1 fails)
+          
+          ```bash
+          curl -sL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
           ```
           
           ### Usage
           
           ```bash
-          ./cf-scanner           # Test 500 IPs (default)
-          ./cf-scanner 100       # Test 100 IPs (faster)
-          ./cf-scanner 1000      # Test 1000 IPs (more results)
+          cf-scanner           # Test 500 IPs (default)
+          cf-scanner 100       # Test 100 IPs (faster)
+          cf-scanner 1000      # Test 1000 IPs (more results)
           ```
           
           ### Requirements
           
           - Termux (latest version)
           - Android ARM64 device
-          - wget and unzip packages
+          - Stable internet connection
           
           ---
           
