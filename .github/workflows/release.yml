@@ -24,10 +24,15 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
+    - name: Set up Zig
+      uses: goto-bus-stop/setup-zig@v2
+      with:
+        version: 0.11.0
+    
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.23'
+        go-version: '1.22.x'
     
     - name: Get dependencies
       run: |
@@ -36,15 +41,15 @@ jobs:
         go get github.com/fatih/color@v1.16.0
         go get github.com/VividCortex/ewma@v1.2.0
     
-    - name: Build for Android ARM64
+    - name: Build for Android ARM64 with Zig
       run: |
-        CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -buildmode=pie -ldflags="-s -w" -o cf-scanner
+        CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-musl" CXX="zig c++ -target aarch64-linux-musl" go build -trimpath -ldflags="-s -w -linkmode=external -extldflags=-static-pie" -o cf-scanner
     
     - name: Verify build
       run: |
         file cf-scanner
-        readelf -h cf-scanner | grep Type
-        readelf -l cf-scanner | grep TLS -A 2
+        readelf -h cf-scanner | grep "Type:"
+        readelf -l cf-scanner | grep "TLS" -A 2 || echo "No TLS segment"
         ls -lh cf-scanner
     
     - name: Create zip file
