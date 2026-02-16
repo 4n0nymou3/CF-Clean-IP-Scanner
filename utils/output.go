@@ -31,12 +31,12 @@ func PrintResults(results []scanner.IPResult) {
 		
 		if i == 0 {
 			yellow.Printf("%-6s ", rank)
-			yellow.Printf("%-18s ", result.IP)
+			yellow.Printf("%-18s ", result.IP.String())
 			yellow.Printf("%-15s ", latency)
 			yellow.Printf("%-15s\n", speed)
 		} else {
 			white.Printf("%-6s ", rank)
-			green.Printf("%-18s ", result.IP)
+			green.Printf("%-18s ", result.IP.String())
 			white.Printf("%-15s ", latency)
 			cyan.Printf("%-15s\n", speed)
 		}
@@ -62,7 +62,7 @@ func SaveResults(results []scanner.IPResult, filename string) error {
 	for i, result := range results {
 		line := fmt.Sprintf("%d. %s | %dms | %.2f MB/s\n",
 			i+1,
-			result.IP,
+			result.IP.String(),
 			result.Latency.Milliseconds(),
 			result.DownloadSpeed/1024/1024,
 		)
