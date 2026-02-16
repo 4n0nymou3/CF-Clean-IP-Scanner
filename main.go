@@ -11,7 +11,7 @@ import (
 	"github.com/4n0nymou3/CF-Clean-IP-Scanner/utils"
 )
 
-const version = "1.0.0"
+const version = "1.0.3"
 
 func main() {
 	utils.PrintHeader()
@@ -29,9 +29,9 @@ func main() {
 	
 	yellow := color.New(color.FgYellow)
 	yellow.Printf("IP Ranges: %d\n", len(ipRanges))
-	yellow.Println("Generating random IPs...\n")
+	yellow.Println("Generating IPs from ranges...\n")
 	
-	ips := scanner.GenerateIPs(ipRanges, 200)
+	ips := scanner.GenerateIPs(ipRanges, 0)
 	
 	cyan.Printf("Total IPs to scan: %d\n\n", len(ips))
 	
@@ -43,7 +43,7 @@ func main() {
 		red.Println("This can happen due to:")
 		red.Println("  - Network filtering/firewall")
 		red.Println("  - Unstable internet connection")
-		red.Println("  - All IPs are currently slow")
+		red.Println("  - All tested IPs are currently slow")
 		fmt.Println()
 		yellow.Println("Please try again in a few minutes.")
 		os.Exit(1)
