@@ -27,7 +27,7 @@ func PrintResults(results []scanner.IPResult) {
 	for i, result := range results {
 		rank := fmt.Sprintf("%d.", i+1)
 		latency := fmt.Sprintf("%dms", result.Latency.Milliseconds())
-		speed := fmt.Sprintf("%.2f MB/s", result.DownloadSpeed)
+		speed := fmt.Sprintf("%.2f MB/s", result.DownloadSpeed/1024/1024)
 		
 		if i == 0 {
 			yellow.Printf("%-6s ", rank)
@@ -64,7 +64,7 @@ func SaveResults(results []scanner.IPResult, filename string) error {
 			i+1,
 			result.IP,
 			result.Latency.Milliseconds(),
-			result.DownloadSpeed,
+			result.DownloadSpeed/1024/1024,
 		)
 		file.WriteString(line)
 	}
