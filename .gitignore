@@ -4,3 +4,8 @@ cf-scanner
 cf-scanner-*
 *.zip
 go.sum
+
+.DS_Store
+*.swp
+*.swo
+*~
