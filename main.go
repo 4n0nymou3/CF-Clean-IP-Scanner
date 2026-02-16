@@ -99,7 +99,6 @@ func main() {
 		fmt.Println()
 		yellow.Println("Try:")
 		yellow.Println("  - Run again at different time (night)")
-		yellow.Println("  - Enable VPN if available")
 		yellow.Println("  - Use lower number: cf-scanner 100")
 		os.Exit(1)
 	}
