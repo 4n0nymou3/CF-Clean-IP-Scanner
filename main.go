@@ -25,15 +25,15 @@ func main() {
 			fmt.Println()
 			yellow := color.New(color.FgYellow)
 			yellow.Println("Usage:")
-			yellow.Println("  ./cf-scanner           (test 500 IPs - default)")
-			yellow.Println("  ./cf-scanner <number>  (test custom number of IPs)")
+			yellow.Println("  cf-scanner           (test 500 IPs - default)")
+			yellow.Println("  cf-scanner <number>  (test custom number of IPs)")
 			fmt.Println()
 			yellow.Println("Valid range: 10 to 1000")
 			fmt.Println()
 			yellow.Println("Examples:")
-			yellow.Println("  ./cf-scanner 100   (test 100 IPs)")
-			yellow.Println("  ./cf-scanner 250   (test 250 IPs)")
-			yellow.Println("  ./cf-scanner 1000  (test 1000 IPs)")
+			yellow.Println("  cf-scanner 100   (test 100 IPs)")
+			yellow.Println("  cf-scanner 250   (test 250 IPs)")
+			yellow.Println("  cf-scanner 1000  (test 1000 IPs)")
 			os.Exit(1)
 		}
 		
@@ -46,9 +46,9 @@ func main() {
 			yellow.Println("Valid range: 10 to 1000")
 			fmt.Println()
 			yellow.Println("Examples:")
-			yellow.Println("  ./cf-scanner 10    (minimum)")
-			yellow.Println("  ./cf-scanner 500   (default)")
-			yellow.Println("  ./cf-scanner 1000  (maximum)")
+			yellow.Println("  cf-scanner 10    (minimum)")
+			yellow.Println("  cf-scanner 500   (default)")
+			yellow.Println("  cf-scanner 1000  (maximum)")
 			os.Exit(1)
 		}
 		
@@ -100,7 +100,7 @@ func main() {
 		yellow.Println("Try:")
 		yellow.Println("  - Run again at different time (night)")
 		yellow.Println("  - Enable VPN if available")
-		yellow.Println("  - Use lower number: ./cf-scanner 100")
+		yellow.Println("  - Use lower number: cf-scanner 100")
 		os.Exit(1)
 	}
 	
