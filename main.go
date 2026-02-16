@@ -23,13 +23,16 @@ func main() {
 	cyan.Printf("Version: %s\n", version)
 	cyan.Println("Starting Cloudflare Clean IP Scanner...\n")
 	
+	yellow := color.New(color.FgYellow)
+	yellow.Println("Optimized for Iran network conditions")
+	yellow.Println("Testing more IPs with longer timeout...\n")
+	
 	time.Sleep(1 * time.Second)
 	
 	ipRanges := config.GetCloudflareRanges()
 	
-	yellow := color.New(color.FgYellow)
-	yellow.Printf("IP Ranges: %d\n", len(ipRanges))
-	yellow.Println("Generating IPs from ranges...\n")
+	cyan.Printf("IP Ranges: %d\n", len(ipRanges))
+	cyan.Println("Generating IPs from ranges...\n")
 	
 	ips := scanner.GenerateIPs(ipRanges, 0)
 	
@@ -40,12 +43,12 @@ func main() {
 	if len(results) == 0 {
 		red := color.New(color.FgRed, color.Bold)
 		red.Println("\nNo clean IPs found!")
-		red.Println("This can happen due to:")
-		red.Println("  - Network filtering/firewall")
-		red.Println("  - Unstable internet connection")
-		red.Println("  - All tested IPs are currently slow")
+		red.Println("Possible reasons:")
+		red.Println("  - Severe network filtering")
+		red.Println("  - Connection is very slow")
+		red.Println("  - Try again at different time")
 		fmt.Println()
-		yellow.Println("Please try again in a few minutes.")
+		yellow.Println("Tip: Try with VPN if available")
 		os.Exit(1)
 	}
 	
