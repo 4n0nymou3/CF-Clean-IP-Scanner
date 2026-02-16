@@ -27,7 +27,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.21'
+        go-version: '1.23'
     
     - name: Get dependencies
       run: |
@@ -44,6 +44,7 @@ jobs:
       run: |
         file cf-scanner
         readelf -h cf-scanner | grep Type
+        readelf -l cf-scanner | grep TLS -A 2
         ls -lh cf-scanner
     
     - name: Create zip file
