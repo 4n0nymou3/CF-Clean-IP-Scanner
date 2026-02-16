@@ -23,40 +23,31 @@ const (
 )
 
 type IPResult struct {
-	IP            string
+	IP            *net.IPAddr
 	Latency       time.Duration
 	DownloadSpeed float64
 }
 
-func isIPv4(ip string) bool {
-	return net.ParseIP(ip).To4() != nil
-}
-
-func getDialContext(ip string) func(ctx context.Context, network, address string) (net.Conn, error) {
+func getDialContext(ip *net.IPAddr) func(ctx context.Context, network, address string) (net.Conn, error) {
+	var fakeSourceAddr string
+	if isIPv4(ip.String()) {
+		fakeSourceAddr = fmt.Sprintf("%s:%d", ip.String(), port)
+	} else {
+		fakeSourceAddr = fmt.Sprintf("[%s]:%d", ip.String(), port)
+	}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		dialer := &net.Dialer{
-			Timeout:   speedTestTimeout,
-			KeepAlive: 0,
-		}
-		var addr string
-		if isIPv4(ip) {
-			addr = fmt.Sprintf("%s:443", ip)
-		} else {
-			addr = fmt.Sprintf("[%s]:443", ip)
-		}
-		return dialer.DialContext(ctx, "tcp", addr)
+		return (&net.Dialer{}).DialContext(ctx, network, fakeSourceAddr)
 	}
 }
 
-func testDownloadSpeed(ip string) (float64, error) {
+func testDownloadSpeed(ip *net.IPAddr) float64 {
 	transport := &http.Transport{
 		DialContext: getDialContext(ip),
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
 		},
-		DisableKeepAlives: true,
 	}
-
+	
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   speedTestTimeout,
@@ -70,24 +61,24 @@ func testDownloadSpeed(ip string) (float64, error) {
 			return nil
 		},
 	}
-
+	
 	req, err := http.NewRequest("GET", speedTestURL, nil)
 	if err != nil {
-		return 0, err
+		return 0.0
 	}
 
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.80 Safari/537.36")
 
 	response, err := client.Do(req)
 	if err != nil {
-		return 0, err
+		return 0.0
 	}
 	defer response.Body.Close()
-
+	
 	if response.StatusCode != 200 {
-		return 0, fmt.Errorf("status code: %d", response.StatusCode)
+		return 0.0
 	}
-
+	
 	timeStart := time.Now()
 	timeEnd := timeStart.Add(speedTestTimeout)
 
@@ -112,11 +103,11 @@ func testDownloadSpeed(ip string) (float64, error) {
 			e.Add(float64(contentRead - lastContentRead))
 			lastContentRead = contentRead
 		}
-
+		
 		if currentTime.After(timeEnd) {
 			break
 		}
-
+		
 		bufferRead, err := response.Body.Read(buffer)
 		if err != nil {
 			if err != io.EOF {
@@ -129,12 +120,11 @@ func testDownloadSpeed(ip string) (float64, error) {
 		}
 		contentRead += int64(bufferRead)
 	}
-
-	speed := e.Value() / (speedTestTimeout.Seconds() / 120)
-	return speed, nil
+	
+	return e.Value() / (speedTestTimeout.Seconds() / 120)
 }
 
-func ScanIPs(ips []string) []IPResult {
+func ScanIPs(ips []*net.IPAddr) []IPResult {
 	cyan := color.New(color.FgCyan, color.Bold)
 	cyan.Println("========================================")
 	cyan.Println("      STEP 1: Latency Testing")
@@ -172,6 +162,7 @@ func ScanIPs(ips []string) []IPResult {
 
 	yellow := color.New(color.FgYellow)
 	completed := 0
+	foundCount := 0
 
 	yellow.Println("Testing download speed...")
 	fmt.Println()
@@ -184,15 +175,16 @@ func ScanIPs(ips []string) []IPResult {
 			defer wg.Done()
 			defer func() { <-semaphore }()
 
-			speed, err := testDownloadSpeed(pr.IP)
+			speed := testDownloadSpeed(pr.IP)
 
 			mu.Lock()
 			completed++
 			if completed%5 == 0 || completed == testCount {
-				yellow.Printf("Progress: %d/%d IPs tested\n", completed, testCount)
+				yellow.Printf("Progress: %d/%d IPs tested (found: %d)\n", completed, testCount, foundCount)
 			}
 
-			if err == nil && speed > 0 {
+			if speed > 0 {
+				foundCount++
 				results = append(results, IPResult{
 					IP:            pr.IP,
 					Latency:       pr.Latency,
