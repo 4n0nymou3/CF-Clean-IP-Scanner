@@ -34,6 +34,7 @@ jobs:
         go mod download
         go mod tidy
         go get github.com/fatih/color@v1.16.0
+        go get github.com/VividCortex/ewma@v1.2.0
     
     - name: Build for Android ARM64
       run: |
