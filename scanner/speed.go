@@ -17,7 +17,6 @@ import (
 const (
 	bufferSize       = 1024
 	speedTestTimeout = 20 * time.Second
-	maxSpeedTests    = 500
 )
 
 var speedTestURLs = []string{
@@ -140,7 +139,7 @@ func testDownloadSpeed(ip *net.IPAddr) float64 {
 	return 0.0
 }
 
-func ScanIPs(ips []*net.IPAddr) []IPResult {
+func ScanIPs(ips []*net.IPAddr, maxSpeedTests int) []IPResult {
 	cyan := color.New(color.FgCyan, color.Bold)
 	cyan.Println("========================================")
 	cyan.Println("      STEP 1: Latency Testing")
