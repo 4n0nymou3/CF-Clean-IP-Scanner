@@ -125,10 +125,6 @@ chmod +x cf-scanner
 rm cf-scanner cf-scanner-arm64.zip clean_ips.txt
 ```
 
-## لایسنس
-
-MIT License - استفاده آزاد
-
 ## نکات
 
 - تست را با VPN خاموش انجام دهید
