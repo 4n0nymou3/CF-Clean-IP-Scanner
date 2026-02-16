@@ -22,10 +22,13 @@ const (
 
 var speedTestURLs = []string{
 	"https://cloudflare.com/cdn-cgi/trace",
+	"https://www.cloudflare.com/cdn-cgi/trace",
 	"https://www.cloudflare.com/",
 	"https://1.1.1.1/cdn-cgi/trace",
 	"https://cloudflare-dns.com/",
 	"https://cf.xiu2.xyz/url",
+	"https://www.google.com/generate_204",
+	"https://www.microsoft.com",
 }
 
 type IPResult struct {
