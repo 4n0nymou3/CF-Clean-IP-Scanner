@@ -84,14 +84,21 @@ func (r *IPRanges) chooseIPv4() {
 		r.appendIP(r.firstIP)
 	} else {
 		minIP, hosts := r.getIPRange()
+		maxIterations := 0
 		for r.ipNet.Contains(r.firstIP) {
-			r.appendIPv4(minIP + randIPEndWith(hosts))
+			for i := 0; i < 3; i++ {
+				r.appendIPv4(minIP + randIPEndWith(hosts))
+			}
 			r.firstIP[14]++
 			if r.firstIP[14] == 0 {
 				r.firstIP[13]++
 				if r.firstIP[13] == 0 {
 					r.firstIP[12]++
 				}
+			}
+			maxIterations++
+			if maxIterations > 10000 {
+				break
 			}
 		}
 	}
@@ -102,6 +109,7 @@ func (r *IPRanges) chooseIPv6() {
 		r.appendIP(r.firstIP)
 	} else {
 		var tempIP uint8
+		maxIterations := 0
 		for r.ipNet.Contains(r.firstIP) {
 			r.firstIP[15] = randIPEndWith(255)
 			r.firstIP[14] = randIPEndWith(255)
@@ -116,6 +124,10 @@ func (r *IPRanges) chooseIPv6() {
 				if r.firstIP[i] >= tempIP {
 					break
 				}
+			}
+			maxIterations++
+			if maxIterations > 10000 {
+				break
 			}
 		}
 	}
