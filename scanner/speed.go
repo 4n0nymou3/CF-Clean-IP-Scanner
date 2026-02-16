@@ -17,7 +17,7 @@ import (
 const (
 	bufferSize       = 1024
 	speedTestTimeout = 20 * time.Second
-	maxSpeedTests    = 100
+	maxSpeedTests    = 200
 )
 
 var speedTestURLs = []string{
