@@ -10,21 +10,28 @@ import (
 )
 
 const (
-	pingTimeout   = 2 * time.Second
+	pingTimeout   = 1 * time.Second
 	port          = 443
 	maxGoroutines = 100
 )
 
 type PingResult struct {
-	IP      string
+	IP      *net.IPAddr
 	Latency time.Duration
 	Success bool
 }
 
-func pingIP(ip string) PingResult {
+func pingIP(ip *net.IPAddr) PingResult {
 	start := time.Now()
 	
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", ip, port), pingTimeout)
+	var fullAddress string
+	if isIPv4(ip.String()) {
+		fullAddress = fmt.Sprintf("%s:%d", ip.String(), port)
+	} else {
+		fullAddress = fmt.Sprintf("[%s]:%d", ip.String(), port)
+	}
+	
+	conn, err := net.DialTimeout("tcp", fullAddress, pingTimeout)
 	if err != nil {
 		return PingResult{IP: ip, Success: false}
 	}
@@ -39,7 +46,7 @@ func pingIP(ip string) PingResult {
 	}
 }
 
-func PingIPs(ips []string) []PingResult {
+func PingIPs(ips []*net.IPAddr) []PingResult {
 	var results []PingResult
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -49,6 +56,7 @@ func PingIPs(ips []string) []PingResult {
 	cyan := color.New(color.FgCyan)
 	total := len(ips)
 	completed := 0
+	successCount := 0
 	
 	cyan.Printf("Testing latency for %d IPs...\n", total)
 	
@@ -56,21 +64,22 @@ func PingIPs(ips []string) []PingResult {
 		wg.Add(1)
 		semaphore <- struct{}{}
 		
-		go func(ipAddr string) {
+		go func(ipAddr *net.IPAddr) {
 			defer wg.Done()
 			defer func() { <-semaphore }()
 			
 			result := pingIP(ipAddr)
 			
+			mu.Lock()
+			completed++
 			if result.Success && result.Latency < 500*time.Millisecond {
-				mu.Lock()
 				results = append(results, result)
-				completed++
-				if completed%10 == 0 {
-					cyan.Printf("Progress: %d/%d IPs tested\n", completed, total)
-				}
-				mu.Unlock()
+				successCount++
 			}
+			if completed%100 == 0 {
+				cyan.Printf("Progress: %d/%d IPs tested (found: %d)\n", completed, total, successCount)
+			}
+			mu.Unlock()
 		}(ip)
 	}
 	
