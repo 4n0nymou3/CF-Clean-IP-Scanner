@@ -16,8 +16,7 @@ const version = "1.0.0"
 func main() {
 	utils.PrintHeader()
 	
-	green := color.New(color.FgGreen, color.Bold)
-	green.Println("\nDesigned by: Anonymous\n")
+	utils.PrintDesigner()
 	
 	cyan := color.New(color.FgCyan)
 	cyan.Printf("Version: %s\n", version)
@@ -25,7 +24,7 @@ func main() {
 	
 	yellow := color.New(color.FgYellow)
 	yellow.Println("Optimized for Iran network conditions")
-	yellow.Println("Testing more IPs with longer timeout...\n")
+	yellow.Println("Selection based on latency (ping < 500ms)...\n")
 	
 	time.Sleep(1 * time.Second)
 	
@@ -42,10 +41,10 @@ func main() {
 	
 	if len(results) == 0 {
 		red := color.New(color.FgRed, color.Bold)
-		red.Println("\nNo clean IPs found!")
+		red.Println("\nNo clean IPs found with latency under 500ms!")
 		red.Println("Possible reasons:")
-		red.Println("  - Severe network filtering")
-		red.Println("  - Connection is very slow")
+		red.Println("  - All IPs have high latency")
+		red.Println("  - Network issues")
 		red.Println("  - Try again at different time")
 		fmt.Println()
 		yellow.Println("Tip: Try with VPN if available")
@@ -64,6 +63,7 @@ func main() {
 		red := color.New(color.FgRed)
 		red.Printf("\nError saving file: %v\n", err)
 	} else {
+		green := color.New(color.FgGreen)
 		green.Println("\nResults saved to clean_ips.txt successfully!")
 		green.Printf("Total IPs found: %d\n", len(results))
 	}
