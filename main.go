@@ -40,7 +40,12 @@ func main() {
 	if len(results) == 0 {
 		red := color.New(color.FgRed, color.Bold)
 		red.Println("\nNo clean IPs found!")
-		red.Println("Please try again later.")
+		red.Println("This can happen due to:")
+		red.Println("  - Network filtering/firewall")
+		red.Println("  - Unstable internet connection")
+		red.Println("  - All IPs are currently slow")
+		fmt.Println()
+		yellow.Println("Please try again in a few minutes.")
 		os.Exit(1)
 	}
 	
