@@ -24,7 +24,8 @@ func main() {
 	
 	yellow := color.New(color.FgYellow)
 	yellow.Println("Optimized for Iran network conditions")
-	yellow.Println("Selection based on latency (ping < 500ms)...\n")
+	yellow.Println("2-Stage Test: Latency (ping < 500ms) + Download")
+	yellow.Println("Sorted by: Lowest Latency\n")
 	
 	time.Sleep(1 * time.Second)
 	
@@ -41,13 +42,16 @@ func main() {
 	
 	if len(results) == 0 {
 		red := color.New(color.FgRed, color.Bold)
-		red.Println("\nNo clean IPs found with latency under 500ms!")
+		red.Println("\nNo clean IPs found!")
 		red.Println("Possible reasons:")
-		red.Println("  - All IPs have high latency")
+		red.Println("  - All IPs have high latency (> 500ms)")
+		red.Println("  - No IPs can download successfully")
 		red.Println("  - Network issues")
-		red.Println("  - Try again at different time")
 		fmt.Println()
-		yellow.Println("Tip: Try with VPN if available")
+		yellow.Println("Try:")
+		yellow.Println("  - Run again at different time (night)")
+		yellow.Println("  - Enable VPN if available")
+		yellow.Println("  - Check your internet connection")
 		os.Exit(1)
 	}
 	
