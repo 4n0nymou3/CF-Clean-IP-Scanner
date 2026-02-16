@@ -16,14 +16,16 @@ import (
 
 const (
 	bufferSize       = 1024
-	speedTestTimeout = 15 * time.Second
-	maxSpeedTests    = 50
+	speedTestTimeout = 20 * time.Second
+	maxSpeedTests    = 100
 )
 
 var speedTestURLs = []string{
-	"https://cf.xiu2.xyz/url",
-	"https://speed.cloudflare.com/__down?bytes=50000000",
+	"https://cloudflare.com/cdn-cgi/trace",
+	"https://www.cloudflare.com/",
 	"https://1.1.1.1/cdn-cgi/trace",
+	"https://cloudflare-dns.com/",
+	"https://cf.xiu2.xyz/url",
 }
 
 type IPResult struct {
@@ -40,7 +42,7 @@ func getDialContext(ip *net.IPAddr) func(ctx context.Context, network, address s
 		fakeSourceAddr = fmt.Sprintf("[%s]:%d", ip.String(), port)
 	}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, fakeSourceAddr)
+		return (&net.Dialer{Timeout: 8 * time.Second}).DialContext(ctx, network, fakeSourceAddr)
 	}
 }
 
@@ -49,14 +51,12 @@ func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string) float64 {
 		Transport: &http.Transport{
 			DialContext:           getDialContext(ip),
 			DisableKeepAlives:     true,
-			ResponseHeaderTimeout: 5 * time.Second,
+			ResponseHeaderTimeout: 8 * time.Second,
+			MaxIdleConns:          1,
 		},
 		Timeout: speedTestTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) > 10 {
-				return http.ErrUseLastResponse
-			}
-			return nil
+			return http.ErrUseLastResponse
 		},
 	}
 	
@@ -65,7 +65,7 @@ func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string) float64 {
 		return 0.0
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.80 Safari/537.36")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 	response, err := client.Do(req)
 	if err != nil {
@@ -119,11 +119,12 @@ func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string) float64 {
 		contentRead += int64(bufferRead)
 	}
 	
-	if contentRead < 1024 {
+	if contentRead < 256 {
 		return 0.0
 	}
 	
-	return e.Value() / (speedTestTimeout.Seconds() / 120)
+	speed := e.Value() / (speedTestTimeout.Seconds() / 120)
+	return speed
 }
 
 func testDownloadSpeed(ip *net.IPAddr) float64 {
@@ -170,13 +171,14 @@ func ScanIPs(ips []*net.IPAddr) []IPResult {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	semaphore := make(chan struct{}, 10)
+	semaphore := make(chan struct{}, 3)
 
 	yellow := color.New(color.FgYellow)
 	completed := 0
 	foundCount := 0
 
-	yellow.Println("Testing download speed (trying multiple URLs)...")
+	yellow.Println("Testing download speed...")
+	yellow.Println("This may take a few minutes. Please wait...")
 	fmt.Println()
 
 	for i := 0; i < testCount; i++ {
