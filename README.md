@@ -19,11 +19,20 @@ pkg update && pkg upgrade && pkg install wget unzip && wget https://github.com/4
 
 ## استفاده
 
-فقط کافی است اجرا کنید:
-
+### حالت پیشفرض (500 IP):
 ```bash
 ./cf-scanner
 ```
+
+### حالت سفارشی (تعداد دلخواه):
+```bash
+./cf-scanner 100    # تست 100 IP (سریع‌تر)
+./cf-scanner 250    # تست 250 IP
+./cf-scanner 500    # تست 500 IP (پیشفرض)
+./cf-scanner 1000   # تست 1000 IP (بیشترین)
+```
+
+**محدودیت**: حداقل 10، حداکثر 1000
 
 ## روند کار
 
