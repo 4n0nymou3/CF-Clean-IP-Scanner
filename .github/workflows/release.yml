@@ -38,7 +38,7 @@ jobs:
     
     - name: Build for Android ARM64
       run: |
-        GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -buildmode=pie -ldflags="-s -w -extldflags=-pie" -o cf-scanner
+        GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o cf-scanner
     
     - name: Verify build
       run: |
