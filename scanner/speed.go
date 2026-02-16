@@ -2,7 +2,6 @@ package scanner
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -17,10 +16,15 @@ import (
 
 const (
 	bufferSize       = 1024
-	speedTestURL     = "https://cf.xiu2.xyz/url"
-	speedTestTimeout = 10 * time.Second
+	speedTestTimeout = 15 * time.Second
 	maxSpeedTests    = 50
 )
+
+var speedTestURLs = []string{
+	"https://cf.xiu2.xyz/url",
+	"https://speed.cloudflare.com/__down?bytes=50000000",
+	"https://1.1.1.1/cdn-cgi/trace",
+}
 
 type IPResult struct {
 	IP            *net.IPAddr
@@ -36,33 +40,27 @@ func getDialContext(ip *net.IPAddr) func(ctx context.Context, network, address s
 		fakeSourceAddr = fmt.Sprintf("[%s]:%d", ip.String(), port)
 	}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, network, fakeSourceAddr)
+		return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, fakeSourceAddr)
 	}
 }
 
-func testDownloadSpeed(ip *net.IPAddr) float64 {
-	transport := &http.Transport{
-		DialContext: getDialContext(ip),
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-		},
-	}
-	
+func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string) float64 {
 	client := &http.Client{
-		Transport: transport,
-		Timeout:   speedTestTimeout,
+		Transport: &http.Transport{
+			DialContext:           getDialContext(ip),
+			DisableKeepAlives:     true,
+			ResponseHeaderTimeout: 5 * time.Second,
+		},
+		Timeout: speedTestTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) > 10 {
 				return http.ErrUseLastResponse
-			}
-			if req.Header.Get("Referer") == speedTestURL {
-				req.Header.Del("Referer")
 			}
 			return nil
 		},
 	}
 	
-	req, err := http.NewRequest("GET", speedTestURL, nil)
+	req, err := http.NewRequest("GET", testURL, nil)
 	if err != nil {
 		return 0.0
 	}
@@ -75,7 +73,7 @@ func testDownloadSpeed(ip *net.IPAddr) float64 {
 	}
 	defer response.Body.Close()
 	
-	if response.StatusCode != 200 {
+	if response.StatusCode != 200 && response.StatusCode != 301 && response.StatusCode != 302 {
 		return 0.0
 	}
 	
@@ -121,7 +119,21 @@ func testDownloadSpeed(ip *net.IPAddr) float64 {
 		contentRead += int64(bufferRead)
 	}
 	
+	if contentRead < 1024 {
+		return 0.0
+	}
+	
 	return e.Value() / (speedTestTimeout.Seconds() / 120)
+}
+
+func testDownloadSpeed(ip *net.IPAddr) float64 {
+	for _, url := range speedTestURLs {
+		speed := testDownloadSpeedWithURL(ip, url)
+		if speed > 0 {
+			return speed
+		}
+	}
+	return 0.0
 }
 
 func ScanIPs(ips []*net.IPAddr) []IPResult {
@@ -158,13 +170,13 @@ func ScanIPs(ips []*net.IPAddr) []IPResult {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	semaphore := make(chan struct{}, 5)
+	semaphore := make(chan struct{}, 10)
 
 	yellow := color.New(color.FgYellow)
 	completed := 0
 	foundCount := 0
 
-	yellow.Println("Testing download speed...")
+	yellow.Println("Testing download speed (trying multiple URLs)...")
 	fmt.Println()
 
 	for i := 0; i < testCount; i++ {
