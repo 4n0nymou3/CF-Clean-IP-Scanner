@@ -1,6 +1,6 @@
 module github.com/4n0nymou3/CF-Clean-IP-Scanner
 
-go 1.21
+go 1.22
 
 require (
 	github.com/VividCortex/ewma v1.2.0
