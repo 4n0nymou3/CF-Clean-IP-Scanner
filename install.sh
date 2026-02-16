@@ -48,14 +48,14 @@ fi
 echo "✓ Build completed"
 
 echo ""
-echo "[5/5] Creating shortcut..."
-cat > ~/cf-scanner << 'SCRIPT'
+echo "[5/5] Installing to system..."
+cat > $PREFIX/bin/cf-scanner << 'SCRIPT'
 #!/data/data/com.termux/files/usr/bin/bash
 cd ~/CF-Clean-IP-Scanner
 ./cf-scanner "$@"
 SCRIPT
-chmod +x ~/cf-scanner
-echo "✓ Shortcut created"
+chmod +x $PREFIX/bin/cf-scanner
+echo "✓ Installed to PATH"
 
 echo ""
 echo "=========================================="
