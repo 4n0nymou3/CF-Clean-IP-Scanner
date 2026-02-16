@@ -13,81 +13,133 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
-func GenerateIPs(ranges []string, countPerRange int) []string {
-	var ips []string
-	
-	for _, cidr := range ranges {
-		generated := generateIPsFromCIDR(cidr, countPerRange)
-		ips = append(ips, generated...)
+func randIPEndWith(num byte) byte {
+	if num == 0 {
+		return byte(0)
 	}
-	
-	return ips
+	return byte(rand.Intn(int(num)))
 }
 
-func generateIPsFromCIDR(cidr string, count int) []string {
-	ip, ipNet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return nil
+type IPRanges struct {
+	ips     []*net.IPAddr
+	mask    string
+	firstIP net.IP
+	ipNet   *net.IPNet
+}
+
+func newIPRanges() *IPRanges {
+	return &IPRanges{
+		ips: make([]*net.IPAddr, 0),
 	}
-	
-	var ips []string
-	
-	ones, bits := ipNet.Mask.Size()
-	if bits-ones > 8 {
-		for i := 0; i < count; i++ {
-			randomIP := generateRandomIP(ip, ipNet)
-			ips = append(ips, randomIP.String())
+}
+
+func (r *IPRanges) fixIP(ip string) string {
+	if i := strings.IndexByte(ip, '/'); i < 0 {
+		if isIPv4(ip) {
+			r.mask = "/32"
+		} else {
+			r.mask = "/128"
 		}
+		ip += r.mask
 	} else {
-		for ip := ip.Mask(ipNet.Mask); ipNet.Contains(ip); inc(ip) {
-			ips = append(ips, ip.String())
-			if len(ips) >= count {
-				break
-			}
-		}
+		r.mask = ip[i:]
 	}
-	
-	return ips
-}
-
-func generateRandomIP(baseIP net.IP, ipNet *net.IPNet) net.IP {
-	ip := make(net.IP, len(baseIP))
-	copy(ip, baseIP)
-	
-	maskLen := len(ipNet.Mask)
-	offset := len(ip) - maskLen
-	
-	for i := 0; i < maskLen; i++ {
-		if ipNet.Mask[i] == 0 {
-			ip[offset+i] = byte(rand.Intn(256))
-		} else if ipNet.Mask[i] != 255 {
-			hostBits := 255 ^ ipNet.Mask[i]
-			ip[offset+i] = (baseIP[offset+i] & ipNet.Mask[i]) | byte(rand.Intn(int(hostBits)+1))
-		}
-	}
-	
 	return ip
 }
 
-func inc(ip net.IP) {
-	for j := len(ip) - 1; j >= 0; j-- {
-		ip[j]++
-		if ip[j] > 0 {
-			break
+func (r *IPRanges) parseCIDR(ip string) {
+	var err error
+	if r.firstIP, r.ipNet, err = net.ParseCIDR(r.fixIP(ip)); err != nil {
+		fmt.Printf("ParseCIDR error: %v\n", err)
+		return
+	}
+}
+
+func (r *IPRanges) appendIPv4(d byte) {
+	r.appendIP(net.IPv4(r.firstIP[12], r.firstIP[13], r.firstIP[14], d))
+}
+
+func (r *IPRanges) appendIP(ip net.IP) {
+	r.ips = append(r.ips, &net.IPAddr{IP: ip})
+}
+
+func (r *IPRanges) getIPRange() (minIP, hosts byte) {
+	minIP = r.firstIP[15] & r.ipNet.Mask[3]
+
+	m := net.IPv4Mask(255, 255, 255, 255)
+	for i, v := range r.ipNet.Mask {
+		m[i] ^= v
+	}
+	total, _ := strconv.ParseInt(m.String(), 16, 32)
+	if total > 255 {
+		hosts = 255
+		return
+	}
+	hosts = byte(total)
+	return
+}
+
+func (r *IPRanges) chooseIPv4() {
+	if r.mask == "/32" {
+		r.appendIP(r.firstIP)
+	} else {
+		minIP, hosts := r.getIPRange()
+		for r.ipNet.Contains(r.firstIP) {
+			r.appendIPv4(minIP + randIPEndWith(hosts))
+			r.firstIP[14]++
+			if r.firstIP[14] == 0 {
+				r.firstIP[13]++
+				if r.firstIP[13] == 0 {
+					r.firstIP[12]++
+				}
+			}
 		}
 	}
 }
 
-func parseIP(ipStr string) (byte, byte, byte, byte, error) {
-	parts := strings.Split(ipStr, ".")
-	if len(parts) != 4 {
-		return 0, 0, 0, 0, fmt.Errorf("invalid IP")
+func (r *IPRanges) chooseIPv6() {
+	if r.mask == "/128" {
+		r.appendIP(r.firstIP)
+	} else {
+		var tempIP uint8
+		for r.ipNet.Contains(r.firstIP) {
+			r.firstIP[15] = randIPEndWith(255)
+			r.firstIP[14] = randIPEndWith(255)
+
+			targetIP := make([]byte, len(r.firstIP))
+			copy(targetIP, r.firstIP)
+			r.appendIP(targetIP)
+
+			for i := 13; i >= 0; i-- {
+				tempIP = r.firstIP[i]
+				r.firstIP[i] += randIPEndWith(255)
+				if r.firstIP[i] >= tempIP {
+					break
+				}
+			}
+		}
+	}
+}
+
+func isIPv4(ip string) bool {
+	return strings.Contains(ip, ".")
+}
+
+func GenerateIPs(ranges []string, countPerRange int) []*net.IPAddr {
+	ipRanges := newIPRanges()
+	
+	for _, ipRange := range ranges {
+		ipRange = strings.TrimSpace(ipRange)
+		if ipRange == "" {
+			continue
+		}
+		ipRanges.parseCIDR(ipRange)
+		if isIPv4(ipRange) {
+			ipRanges.chooseIPv4()
+		} else {
+			ipRanges.chooseIPv6()
+		}
 	}
 	
-	a, _ := strconv.Atoi(parts[0])
-	b, _ := strconv.Atoi(parts[1])
-	c, _ := strconv.Atoi(parts[2])
-	d, _ := strconv.Atoi(parts[3])
-	
-	return byte(a), byte(b), byte(c), byte(d), nil
+	return ipRanges.ips
 }
