@@ -59,6 +59,9 @@ func PingIPs(ips []*net.IPAddr) []PingResult {
 	successCount := 0
 	
 	cyan.Printf("Testing latency for %d IPs...\n", total)
+	fmt.Println()
+	
+	barWidth := 50
 	
 	for _, ip := range ips {
 		wg.Add(1)
@@ -76,15 +79,32 @@ func PingIPs(ips []*net.IPAddr) []PingResult {
 				results = append(results, result)
 				successCount++
 			}
-			if completed%100 == 0 {
-				cyan.Printf("Progress: %d/%d IPs tested (found: %d)\n", completed, total, successCount)
+			
+			progress := float64(completed) / float64(total)
+			filledWidth := int(progress * float64(barWidth))
+			
+			bar := "["
+			for j := 0; j < barWidth; j++ {
+				if j < filledWidth {
+					bar += "="
+				} else if j == filledWidth {
+					bar += ">"
+				} else {
+					bar += " "
+				}
 			}
+			bar += "]"
+			
+			fmt.Printf("\r%s %3d%% (%d/%d) - Found: %d", bar, int(progress*100), completed, total, successCount)
+			
 			mu.Unlock()
 		}(ip)
 	}
 	
 	wg.Wait()
 	
+	fmt.Println()
+	fmt.Println()
 	green := color.New(color.FgGreen)
 	green.Printf("Latency test completed: %d responsive IPs found\n\n", len(results))
 	
