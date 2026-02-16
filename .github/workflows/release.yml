@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version number (e.g., 1.0.0)'
+        description: 'Release version (e.g., 1.0.0)'
         required: true
-        default: '1.0.0'
+        type: string
       prerelease:
-        description: 'Is this a pre-release?'
-        required: true
+        description: 'Mark as pre-release'
+        required: false
         type: choice
         options:
           - 'false'
@@ -22,10 +22,10 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version: '1.21'
     
@@ -38,7 +38,12 @@ jobs:
     
     - name: Build for Android ARM64
       run: |
-        GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o cf-scanner
+        GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -buildmode=pie -ldflags="-s -w -extldflags=-pie" -o cf-scanner
+    
+    - name: Verify build
+      run: |
+        file cf-scanner
+        ls -lh cf-scanner
     
     - name: Create zip file
       run: |
@@ -51,26 +56,39 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: v${{ github.event.inputs.version }}
-        release_name: Version ${{ github.event.inputs.version }}
+        release_name: v${{ github.event.inputs.version }}
         body: |
-          Cloudflare Clean IP Scanner - Version ${{ github.event.inputs.version }}
+          ## CF Clean IP Scanner v${{ github.event.inputs.version }}
           
-          Optimized for Termux Android ARM64
+          **Cloudflare Clean IP Scanner for Termux (Android ARM64)**
           
-          Installation:
+          ### Installation
+          
+          Run this command in Termux:
+          
           ```bash
-          wget https://github.com/${{ github.repository }}/releases/download/v${{ github.event.inputs.version }}/cf-scanner-arm64.zip
-          unzip cf-scanner-arm64.zip
-          chmod +x cf-scanner
-          ./cf-scanner
+          pkg install wget unzip && wget https://github.com/${{ github.repository }}/releases/download/v${{ github.event.inputs.version }}/cf-scanner-arm64.zip && unzip cf-scanner-arm64.zip && chmod +x cf-scanner
           ```
           
-          Features:
-          - Fast IP scanning
-          - Automatic result saving
-          - Simple one-command usage
+          ### Usage
+          
+          ```bash
+          ./cf-scanner           # Test 500 IPs (default)
+          ./cf-scanner 100       # Test 100 IPs (faster)
+          ./cf-scanner 1000      # Test 1000 IPs (more results)
+          ```
+          
+          ### Requirements
+          
+          - Termux (latest version)
+          - Android ARM64 device
+          - wget and unzip packages
+          
+          ---
+          
+          Made with ❤️ for Iranian users
         draft: false
-        prerelease: ${{ github.event.inputs.prerelease }}
+        prerelease: ${{ github.event.inputs.prerelease == 'true' }}
     
     - name: Upload Release Asset
       uses: actions/upload-release-asset@v1
