@@ -2,7 +2,10 @@ module github.com/4n0nymou3/CF-Clean-IP-Scanner
 
 go 1.21
 
-require github.com/fatih/color v1.16.0
+require (
+	github.com/VividCortex/ewma v1.2.0
+	github.com/fatih/color v1.16.0
+)
 
 require (
 	github.com/mattn/go-colorable v0.1.13
