@@ -12,7 +12,7 @@ import (
 	"github.com/4n0nymou3/CF-Clean-IP-Scanner/utils"
 )
 
-const version = "1.1.2"
+const version = "1.1.3"
 
 func main() {
 	maxSpeedTests := 500
