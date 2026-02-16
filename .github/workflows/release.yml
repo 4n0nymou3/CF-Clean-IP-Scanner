@@ -67,7 +67,6 @@ jobs:
           
           Features:
           - Fast IP scanning
-          - Beautiful colored output
           - Automatic result saving
           - Simple one-command usage
         draft: false
