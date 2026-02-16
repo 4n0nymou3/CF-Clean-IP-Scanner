@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/fatih/color"
@@ -11,9 +12,49 @@ import (
 	"github.com/4n0nymou3/CF-Clean-IP-Scanner/utils"
 )
 
-const version = "1.0.0"
+const version = "1.1.0"
 
 func main() {
+	maxSpeedTests := 500
+	
+	if len(os.Args) > 1 {
+		customCount, err := strconv.Atoi(os.Args[1])
+		if err != nil {
+			red := color.New(color.FgRed, color.Bold)
+			red.Println("\nError: Invalid number!")
+			fmt.Println()
+			yellow := color.New(color.FgYellow)
+			yellow.Println("Usage:")
+			yellow.Println("  ./cf-scanner           (test 500 IPs - default)")
+			yellow.Println("  ./cf-scanner <number>  (test custom number of IPs)")
+			fmt.Println()
+			yellow.Println("Valid range: 10 to 1000")
+			fmt.Println()
+			yellow.Println("Examples:")
+			yellow.Println("  ./cf-scanner 100   (test 100 IPs)")
+			yellow.Println("  ./cf-scanner 250   (test 250 IPs)")
+			yellow.Println("  ./cf-scanner 1000  (test 1000 IPs)")
+			os.Exit(1)
+		}
+		
+		if customCount < 10 || customCount > 1000 {
+			red := color.New(color.FgRed, color.Bold)
+			red.Printf("\nError: Number must be between 10 and 1000!\n")
+			red.Printf("You entered: %d\n", customCount)
+			fmt.Println()
+			yellow := color.New(color.FgYellow)
+			yellow.Println("Valid range: 10 to 1000")
+			fmt.Println()
+			yellow.Println("Examples:")
+			yellow.Println("  ./cf-scanner 10    (minimum)")
+			yellow.Println("  ./cf-scanner 500   (default)")
+			yellow.Println("  ./cf-scanner 1000  (maximum)")
+			os.Exit(1)
+		}
+		
+		maxSpeedTests = customCount
+	}
+	
 	utils.PrintHeader()
 	
 	utils.PrintDesigner()
@@ -25,7 +66,15 @@ func main() {
 	yellow := color.New(color.FgYellow)
 	yellow.Println("Optimized for Iran network conditions")
 	yellow.Println("2-Stage Test: Latency (ping < 500ms) + Download")
-	yellow.Println("Sorted by: Lowest Latency\n")
+	yellow.Println("Sorted by: Lowest Latency")
+	
+	if len(os.Args) > 1 {
+		green := color.New(color.FgGreen)
+		green.Printf("Custom mode: Testing %d IPs in STEP 2\n", maxSpeedTests)
+	} else {
+		cyan.Printf("Default mode: Testing %d IPs in STEP 2\n", maxSpeedTests)
+	}
+	fmt.Println()
 	
 	time.Sleep(1 * time.Second)
 	
@@ -38,7 +87,7 @@ func main() {
 	
 	cyan.Printf("Total IPs to scan: %d\n\n", len(ips))
 	
-	results := scanner.ScanIPs(ips)
+	results := scanner.ScanIPs(ips, maxSpeedTests)
 	
 	if len(results) == 0 {
 		red := color.New(color.FgRed, color.Bold)
@@ -51,7 +100,7 @@ func main() {
 		yellow.Println("Try:")
 		yellow.Println("  - Run again at different time (night)")
 		yellow.Println("  - Enable VPN if available")
-		yellow.Println("  - Check your internet connection")
+		yellow.Println("  - Use lower number: ./cf-scanner 100")
 		os.Exit(1)
 	}
 	
