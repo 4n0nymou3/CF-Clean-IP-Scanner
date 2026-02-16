@@ -11,7 +11,7 @@ import (
 	"github.com/4n0nymou3/CF-Clean-IP-Scanner/utils"
 )
 
-const version = "1.0.0"
+const version = "1.0.4"
 
 func main() {
 	utils.PrintHeader()
