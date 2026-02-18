@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -19,277 +21,219 @@ import (
 
 const version = "1.3.0"
 
-var (
-	interrupted  bool
-	interruptMux sync.Mutex
-	dataUsage    int64
-)
-
-func main() {
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	
-	go func() {
-		<-sigChan
-		interruptMux.Lock()
-		interrupted = true
-		interruptMux.Unlock()
-		yellow := color.New(color.FgYellow, color.Bold)
-		fmt.Println()
-		fmt.Println()
-		yellow.Println("========================================")
-		yellow.Println("   Scan interrupted by user (Ctrl+C)")
-		yellow.Println("========================================")
-		fmt.Println()
-		yellow.Println("Saving results found so far...")
-		fmt.Println()
-	}()
-	
-	utils.PrintHeader()
-	
-	utils.PrintDesigner()
-	
-	cyan := color.New(color.FgCyan)
-	cyan.Printf("Version: %s\n", version)
-	cyan.Println("Starting Cloudflare Clean IP Scanner...\n")
-	
-	yellow := color.New(color.FgYellow)
-	yellow.Println("Optimized for Iran network conditions")
-	yellow.Println("2-Stage Test: Latency (ping < 1000ms) + Download")
-	yellow.Println("Sorted by: Lowest Latency")
-	yellow.Println("Press Ctrl+C anytime to stop and save current results")
-	fmt.Println()
-	
-	time.Sleep(1 * time.Second)
-	
-	startTime := time.Now()
-	
-	ipRanges := config.GetCloudflareRanges()
-	
-	cyan.Printf("IP Ranges: %d\n", len(ipRanges))
-	cyan.Println("Generating IPs from ranges...\n")
-	
-	ips := scanner.GenerateIPs(ipRanges, 0)
-	
-	cyan.Printf("Total IPs to scan: %d\n\n", len(ips))
-	
-	scanner.SetGlobalInterruptFlag(&interrupted, &interruptMux)
-	scanner.SetGlobalDataUsage(&dataUsage)
-	
-	cyan.Println("========================================")
-	cyan.Println("      STEP 1: Latency Testing")
-	cyan.Println("========================================")
-	fmt.Println()
-	
-	pingResults := scanner.PingIPs(ips)
-	
-	if len(pingResults) == 0 {
-		red := color.New(color.FgRed, color.Bold)
-		red.Println("\nNo responsive IPs found!")
-		red.Println("Possible reasons:")
-		red.Println("  - All IPs have high latency (> 1000ms)")
-		red.Println("  - Network connectivity issues")
-		red.Println("  - Firewall blocking connections")
-		fmt.Println()
-		yellow.Println("Try:")
-		yellow.Println("  - Check your internet connection")
-		yellow.Println("  - Try again later")
-		yellow.Println("  - Disable any VPN or proxy")
-		
-		fmt.Println()
-		cyan.Println("========================================")
-		cyan.Println("         Scan Statistics")
-		cyan.Println("========================================")
-		fmt.Printf("Duration: %s\n", formatDuration(time.Since(startTime)))
-		cyan.Println("========================================")
-		fmt.Println()
-		
-		os.Exit(1)
-	}
-	
-	if interrupted {
-		results := scanner.ConvertPingResultsToIPResults(pingResults)
-		saveAndExit(results, time.Since(startTime))
-		return
-	}
-	
-	scanner.SortPingResultsByLatency(pingResults)
-	
-	fmt.Println()
-	green := color.New(color.FgGreen)
-	green.Printf("Great! Found %d responsive IPs\n\n", len(pingResults))
-	
-	maxPossible := len(pingResults)
-	var maxSpeedTests int
-	
-	for {
-		fmt.Printf("How many IPs do you want to test in STEP 2? (10-%d): ", maxPossible)
-		
-		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
-		
-		if input == "" {
-			red := color.New(color.FgRed)
-			red.Println("Error: Please enter a number!")
-			fmt.Println()
-			continue
-		}
-		
-		count, err := strconv.Atoi(input)
-		if err != nil {
-			red := color.New(color.FgRed)
-			red.Println("Error: Invalid number!")
-			fmt.Println()
-			continue
-		}
-		
-		if count < 10 {
-			red := color.New(color.FgRed)
-			red.Printf("Error: Number must be at least 10!\n")
-			fmt.Println()
-			continue
-		}
-		
-		if count > maxPossible {
-			red := color.New(color.FgRed)
-			red.Printf("Error: Number cannot exceed %d (total found IPs)!\n", maxPossible)
-			fmt.Println()
-			continue
-		}
-		
-		maxSpeedTests = count
-		break
-	}
-	
-	fmt.Println()
-	cyan.Printf("Starting speed test for %d IPs...\n\n", maxSpeedTests)
-	
-	results := scanner.PerformSpeedTest(pingResults, maxSpeedTests)
-	
-	duration := time.Since(startTime)
-	
-	if len(results) == 0 {
-		red := color.New(color.FgRed, color.Bold)
-		red.Println("\nNo clean IPs found in speed test!")
-		red.Println("Possible reasons:")
-		red.Println("  - URLs are blocked or filtered")
-		red.Println("  - Connection timeout")
-		red.Println("  - Network instability")
-		fmt.Println()
-		yellow.Println("Note:")
-		yellow.Printf("  - %d IPs had good latency (< 1000ms)\n", len(pingResults))
-		yellow.Println("  - But none could complete download test")
-		yellow.Println("  - Try again later or use VPN")
-		
-		fmt.Println()
-		cyan.Println("========================================")
-		cyan.Println("         Scan Statistics")
-		cyan.Println("========================================")
-		fmt.Printf("Duration: %s\n", formatDuration(duration))
-		fmt.Printf("Data used: %s\n", formatBytes(dataUsage))
-		cyan.Println("========================================")
-		fmt.Println()
-		
-		os.Exit(1)
-	}
-	
-	topResults := results
-	if len(results) > 10 {
-		topResults = results[:10]
-	}
-	
-	utils.PrintResults(topResults)
-	
-	err := utils.SaveResults(results, "clean_ips.txt")
-	if err != nil {
-		red := color.New(color.FgRed)
-		red.Printf("\nError saving file: %v\n", err)
-	} else {
-		green = color.New(color.FgGreen)
-		green.Println("\nResults saved to clean_ips.txt successfully!")
-		green.Printf("Total IPs found: %d\n", len(results))
-	}
-	
-	fmt.Println()
-	cyan = color.New(color.FgCyan, color.Bold)
-	cyan.Println("========================================")
-	cyan.Println("         Scan Statistics")
-	cyan.Println("========================================")
-	white := color.New(color.FgWhite)
-	white.Printf("Duration: %s\n", formatDuration(duration))
-	white.Printf("Data used: %s\n", formatBytes(dataUsage))
-	if interrupted {
-		yellow.Println("Status: Interrupted by user")
-	} else {
-		green = color.New(color.FgGreen)
-		green.Println("Status: Completed successfully")
-	}
-	cyan.Println("========================================")
-	fmt.Println()
+func formatDuration(d time.Duration) string {
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	s := int(d.Seconds()) % 60
+	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
 
-func saveAndExit(results []scanner.IPResult, duration time.Duration) {
-	if len(results) == 0 {
-		fmt.Println()
-		red := color.New(color.FgRed)
-		red.Println("No results to save.")
-		os.Exit(1)
+func formatBytes(b int64) string {
+	if b < 1024 {
+		return fmt.Sprintf("%d B", b)
+	} else if b < 1024*1024 {
+		return fmt.Sprintf("%.2f KB", float64(b)/1024)
 	}
-	
-	topResults := results
-	if len(results) > 10 {
-		topResults = results[:10]
-	}
-	
-	utils.PrintResults(topResults)
-	
-	err := utils.SaveResults(results, "clean_ips.txt")
-	if err != nil {
-		red := color.New(color.FgRed)
-		red.Printf("\nError saving file: %v\n", err)
-	} else {
-		green := color.New(color.FgGreen)
-		green.Println("\nResults saved to clean_ips.txt successfully!")
-		green.Printf("Total IPs found: %d\n", len(results))
-	}
-	
+	return fmt.Sprintf("%.2f MB", float64(b)/1024/1024)
+}
+
+func printScanStats(elapsed time.Duration, bytesUsed int64, interrupted bool) {
 	fmt.Println()
 	cyan := color.New(color.FgCyan, color.Bold)
 	cyan.Println("========================================")
-	cyan.Println("         Scan Statistics")
-	cyan.Println("========================================")
-	white := color.New(color.FgWhite)
-	white.Printf("Duration: %s\n", formatDuration(duration))
-	white.Printf("Data used: %s\n", formatBytes(dataUsage))
-	yellow := color.New(color.FgYellow)
-	yellow.Println("Status: Interrupted by user")
+	if interrupted {
+		yellow := color.New(color.FgYellow, color.Bold)
+		yellow.Println("         Scan stopped by user")
+	} else {
+		cyan.Println("      Scan completed successfully!")
+	}
 	cyan.Println("========================================")
 	fmt.Println()
-	
-	os.Exit(0)
+	info := color.New(color.FgCyan)
+	info.Printf("  Scan Duration : %s\n", formatDuration(elapsed))
+	info.Printf("  Data Used     : %s\n", formatBytes(bytesUsed))
+	fmt.Println()
 }
 
-func formatDuration(d time.Duration) string {
-	hours := int(d.Hours())
-	minutes := int(d.Minutes()) % 60
-	seconds := int(d.Seconds()) % 60
-	
-	if hours > 0 {
-		return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
+func askSpeedTestCount(ctx context.Context, max int) (int, bool) {
+	yellow := color.New(color.FgYellow)
+	red := color.New(color.FgRed, color.Bold)
+
+	inputCh := make(chan string)
+	go func() {
+		reader := bufio.NewReader(os.Stdin)
+		for {
+			text, err := reader.ReadString('\n')
+			if err != nil {
+				close(inputCh)
+				return
+			}
+			select {
+			case inputCh <- strings.TrimSpace(text):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	for {
+		yellow.Printf("How many of these %d IPs do you want to speed test?\n", max)
+		yellow.Printf("Enter a number between 10 and %d: ", max)
+
+		select {
+		case <-ctx.Done():
+			fmt.Println()
+			return 0, true
+		case text, ok := <-inputCh:
+			if !ok {
+				return 0, true
+			}
+			n, err := strconv.Atoi(text)
+			if err != nil || n < 10 || n > max {
+				fmt.Println()
+				red.Printf("Invalid input! Please enter a whole number between 10 and %d.\n", max)
+				fmt.Println()
+				continue
+			}
+			return n, false
+		}
 	}
-	return fmt.Sprintf("%02d:%02d", minutes, seconds)
 }
 
-func formatBytes(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
+func main() {
+	utils.PrintHeader()
+	utils.PrintDesigner()
+
+	cyan := color.New(color.FgCyan)
+	cyan.Printf("Version: %s\n", version)
+	cyan.Println("Starting Cloudflare Clean IP Scanner...")
+	fmt.Println()
+
+	yellow := color.New(color.FgYellow)
+	yellow.Println("Optimized for Iran network conditions")
+	yellow.Println("2-Stage Test: Latency (ping < 1000ms) + Download Speed")
+	yellow.Println("Sorted by: Lowest Latency")
+	fmt.Println()
+
+	time.Sleep(1 * time.Second)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		signal.Reset(os.Interrupt)
+		fmt.Println()
+		fmt.Println()
+		color.New(color.FgYellow, color.Bold).Println("Interrupt received. Stopping scan and collecting results...")
+		cancel()
+	}()
+
+	startTime := time.Now()
+	var bytesUsed int64
+
+	ipRanges := config.GetCloudflareRanges()
+	cyan.Printf("IP Ranges: %d\n", len(ipRanges))
+	cyan.Println("Generating IPs from ranges...")
+	fmt.Println()
+
+	ips := scanner.GenerateIPs(ipRanges, 0)
+	cyan.Printf("Total IPs to scan: %d\n\n", len(ips))
+
+	cyanBold := color.New(color.FgCyan, color.Bold)
+	cyanBold.Println("========================================")
+	cyanBold.Println("      STEP 1: Latency Testing")
+	cyanBold.Println("========================================")
+	fmt.Println()
+
+	pingResults := scanner.PingIPs(ctx, ips, &bytesUsed)
+
+	if ctx.Err() != nil {
+		elapsed := time.Since(startTime)
+		color.New(color.FgYellow).Println("Scan was stopped during latency test. No clean IPs to show yet.")
+		printScanStats(elapsed, atomic.LoadInt64(&bytesUsed), true)
+		return
 	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
+
+	if len(pingResults) == 0 {
+		red := color.New(color.FgRed, color.Bold)
+		red.Println("No responsive IPs found!")
+		fmt.Println()
+		yellow.Println("Possible reasons:")
+		yellow.Println("  - All IPs have high latency (> 1000ms)")
+		yellow.Println("  - Network connection issues")
+		yellow.Println("  - Try again at a different time (night hours often better)")
+		elapsed := time.Since(startTime)
+		printScanStats(elapsed, atomic.LoadInt64(&bytesUsed), false)
+		return
 	}
-	return fmt.Sprintf("%.2f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+
+	sort.Slice(pingResults, func(i, j int) bool {
+		return pingResults[i].Latency < pingResults[j].Latency
+	})
+
+	cyan.Printf("Responsive IPs: %d\n\n", len(pingResults))
+
+	cyanBold.Println("========================================")
+	cyanBold.Println("      STEP 2: Download Speed Test")
+	cyanBold.Println("========================================")
+	fmt.Println()
+
+	count, cancelled := askSpeedTestCount(ctx, len(pingResults))
+	if cancelled {
+		elapsed := time.Since(startTime)
+		color.New(color.FgYellow).Println("Scan was stopped before speed test. No clean IPs to show yet.")
+		printScanStats(elapsed, atomic.LoadInt64(&bytesUsed), true)
+		return
+	}
+
+	color.New(color.FgGreen).Printf("Starting speed test for %d IPs...\n\n", count)
+
+	results := scanner.SpeedTest(ctx, pingResults, count, &bytesUsed)
+
+	elapsed := time.Since(startTime)
+	interrupted := ctx.Err() != nil
+
+	if len(results) == 0 {
+		red := color.New(color.FgRed, color.Bold)
+		if interrupted {
+			red.Println("No clean IPs found before scan was stopped.")
+		} else {
+			red.Println("No clean IPs found!")
+			fmt.Println()
+			yellow.Println("Possible reasons:")
+			yellow.Println("  - No IPs could complete a download successfully")
+			yellow.Println("  - Network issues or heavy filtering")
+			yellow.Println("  - Try again at a different time")
+		}
+		printScanStats(elapsed, atomic.LoadInt64(&bytesUsed), interrupted)
+		return
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Latency < results[j].Latency
+	})
+
+	topResults := results
+	if len(results) > 10 {
+		topResults = results[:10]
+	}
+
+	if interrupted {
+		color.New(color.FgYellow, color.Bold).Printf(
+			"\nShowing %d clean IP(s) found before scan was stopped:\n", len(results))
+	}
+
+	utils.PrintResults(topResults)
+
+	if err := utils.SaveResults(results, "clean_ips.txt"); err != nil {
+		color.New(color.FgRed).Printf("Error saving file: %v\n", err)
+	} else {
+		color.New(color.FgGreen).Println("Results saved to clean_ips.txt")
+		color.New(color.FgGreen).Printf("Total clean IPs found: %d\n", len(results))
+	}
+
+	printScanStats(elapsed, atomic.LoadInt64(&bytesUsed), interrupted)
 }
