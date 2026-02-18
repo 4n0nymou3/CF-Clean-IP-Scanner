@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,31 +15,28 @@ import (
 )
 
 const (
-	bufferSize       = 1024
-	speedTestTimeout = 20 * time.Second
+	bufferSize       = 8192
+	speedTestTimeout = 25 * time.Second
+	dialTimeout      = 12 * time.Second
+	headerTimeout    = 12 * time.Second
+	tlsTimeout       = 12 * time.Second
+	minValidBytes    = 256
 )
 
 var speedTestURLs = []string{
 	"https://cloudflare.com/cdn-cgi/trace",
 	"https://www.cloudflare.com/cdn-cgi/trace",
-	"https://www.cloudflare.com/",
 	"https://1.1.1.1/cdn-cgi/trace",
 	"https://cloudflare-dns.com/",
 	"https://cf.xiu2.xyz/url",
-	"https://www.google.com/generate_204",
 	"https://www.microsoft.com",
+	"https://www.cloudflare.com/",
 }
 
 type IPResult struct {
 	IP            *net.IPAddr
 	Latency       int
 	DownloadSpeed float64
-}
-
-var globalDataUsage *int64
-
-func SetGlobalDataUsage(dataUsage *int64) {
-	globalDataUsage = dataUsage
 }
 
 func getDialContext(ip *net.IPAddr) func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -51,41 +47,45 @@ func getDialContext(ip *net.IPAddr) func(ctx context.Context, network, address s
 		fakeSourceAddr = fmt.Sprintf("[%s]:%d", ip.String(), port)
 	}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		return (&net.Dialer{Timeout: 8 * time.Second}).DialContext(ctx, network, fakeSourceAddr)
+		return (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, network, fakeSourceAddr)
 	}
 }
 
-func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string) float64 {
+func testDownloadSpeedWithURL(ctx context.Context, ip *net.IPAddr, testURL string, bytesUsed *int64) float64 {
 	client := &http.Client{
 		Transport: &http.Transport{
-			DialContext:           getDialContext(ip),
-			DisableKeepAlives:     true,
-			ResponseHeaderTimeout: 8 * time.Second,
-			MaxIdleConns:          1,
+			DialContext:            getDialContext(ip),
+			DisableKeepAlives:      true,
+			ResponseHeaderTimeout:  headerTimeout,
+			TLSHandshakeTimeout:    tlsTimeout,
+			MaxIdleConns:           1,
+			MaxResponseHeaderBytes: 64 * 1024,
 		},
 		Timeout: speedTestTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
-	
-	req, err := http.NewRequest("GET", testURL, nil)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
 	if err != nil {
 		return 0.0
 	}
-
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Connection", "close")
 
 	response, err := client.Do(req)
 	if err != nil {
 		return 0.0
 	}
 	defer response.Body.Close()
-	
-	if response.StatusCode != 200 && response.StatusCode != 301 && response.StatusCode != 302 && response.StatusCode != 204 {
+
+	if response.StatusCode != 200 && response.StatusCode != 301 &&
+		response.StatusCode != 302 && response.StatusCode != 204 {
 		return 0.0
 	}
-	
+
 	timeStart := time.Now()
 	timeEnd := timeStart.Add(speedTestTimeout)
 
@@ -99,7 +99,7 @@ func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string) float64 {
 		lastContentRead int64 = 0
 	)
 
-	var nextTime = timeStart.Add(timeSlice * time.Duration(timeCounter))
+	nextTime := timeStart.Add(timeSlice * time.Duration(timeCounter))
 	e := ewma.NewMovingAverage()
 
 	for contentLength != contentRead {
@@ -110,11 +110,11 @@ func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string) float64 {
 			e.Add(float64(contentRead - lastContentRead))
 			lastContentRead = contentRead
 		}
-		
+
 		if currentTime.After(timeEnd) {
 			break
 		}
-		
+
 		bufferRead, err := response.Body.Read(buffer)
 		if err != nil {
 			if err != io.EOF {
@@ -123,25 +123,30 @@ func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string) float64 {
 				break
 			}
 			lastTimeSlice := timeStart.Add(timeSlice * time.Duration(timeCounter-1))
-			e.Add(float64(contentRead-lastContentRead) / (float64(currentTime.Sub(lastTimeSlice)) / float64(timeSlice)))
+			elapsed := float64(currentTime.Sub(lastTimeSlice)) / float64(timeSlice)
+			if elapsed > 0 {
+				e.Add(float64(contentRead-lastContentRead) / elapsed)
+			}
 		}
 		contentRead += int64(bufferRead)
-		if globalDataUsage != nil {
-			atomic.AddInt64(globalDataUsage, int64(bufferRead))
-		}
 	}
-	
-	if contentRead < 256 {
+
+	atomic.AddInt64(bytesUsed, contentRead)
+
+	if contentRead < minValidBytes {
 		return 0.0
 	}
-	
+
 	speed := e.Value() / (speedTestTimeout.Seconds() / 120)
 	return speed
 }
 
-func testDownloadSpeed(ip *net.IPAddr) float64 {
+func testDownloadSpeed(ctx context.Context, ip *net.IPAddr, bytesUsed *int64) float64 {
 	for _, url := range speedTestURLs {
-		speed := testDownloadSpeedWithURL(ip, url)
+		if ctx.Err() != nil {
+			return 0.0
+		}
+		speed := testDownloadSpeedWithURL(ctx, ip, url, bytesUsed)
 		if speed > 0 {
 			return speed
 		}
@@ -149,51 +154,15 @@ func testDownloadSpeed(ip *net.IPAddr) float64 {
 	return 0.0
 }
 
-func ScanIPs(ips []*net.IPAddr, maxSpeedTests int) []IPResult {
-	cyan := color.New(color.FgCyan, color.Bold)
-	cyan.Println("========================================")
-	cyan.Println("      STEP 1: Latency Testing")
-	cyan.Println("========================================")
-	fmt.Println()
-
-	pingResults := PingIPs(ips)
-
-	if len(pingResults) == 0 {
-		return nil
-	}
-	
-	if isInterrupted() {
-		results := make([]IPResult, len(pingResults))
-		for i, pr := range pingResults {
-			results[i] = IPResult{
-				IP:            pr.IP,
-				Latency:       int(pr.Latency.Milliseconds()),
-				DownloadSpeed: 0,
-			}
-		}
-		return results
-	}
-
-	sort.Slice(pingResults, func(i, j int) bool {
-		return pingResults[i].Latency < pingResults[j].Latency
-	})
-
-	testCount := len(pingResults)
-	if testCount > maxSpeedTests {
-		testCount = maxSpeedTests
-	}
-
-	cyan.Printf("Responsive IPs: %d\n", len(pingResults))
-	cyan.Printf("Starting speed test for top %d IPs...\n\n", testCount)
-
-	cyan.Println("========================================")
-	cyan.Println("      STEP 2: Download Speed Test")
-	cyan.Println("========================================")
-	fmt.Println()
-
+func SpeedTest(ctx context.Context, pingResults []PingResult, maxCount int, bytesUsed *int64) []IPResult {
 	var results []IPResult
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+
+	testCount := len(pingResults)
+	if testCount > maxCount {
+		testCount = maxCount
+	}
 
 	semaphore := make(chan struct{}, 3)
 
@@ -203,49 +172,27 @@ func ScanIPs(ips []*net.IPAddr, maxSpeedTests int) []IPResult {
 
 	yellow.Println("Testing download speed...")
 	yellow.Println("This may take a few minutes. Please wait...")
-	yellow.Println("Press Ctrl+C to stop and save current results")
+	yellow.Println("Press Ctrl+C at any time to stop and see results found so far.")
 	fmt.Println()
 
-	barWidth := 50
+	const barWidth = 50
 
 	for i := 0; i < testCount; i++ {
-		if isInterrupted() {
-			break
+		select {
+		case <-ctx.Done():
+			goto waitAndReturn
+		case semaphore <- struct{}{}:
 		}
-		
-		wg.Add(1)
-		semaphore <- struct{}{}
 
-		go func(pr PingResult, index int) {
+		wg.Add(1)
+		go func(pr PingResult) {
 			defer wg.Done()
 			defer func() { <-semaphore }()
 
-			if isInterrupted() {
-				return
-			}
-
-			speed := testDownloadSpeed(pr.IP)
+			speed := testDownloadSpeed(ctx, pr.IP, bytesUsed)
 
 			mu.Lock()
 			completed++
-			
-			progress := float64(completed) / float64(testCount)
-			filledWidth := int(progress * float64(barWidth))
-			
-			bar := "["
-			for j := 0; j < barWidth; j++ {
-				if j < filledWidth {
-					bar += "="
-				} else if j == filledWidth {
-					bar += ">"
-				} else {
-					bar += " "
-				}
-			}
-			bar += "]"
-			
-			fmt.Printf("\r%s %3d%% (%d/%d) - Found: %d", bar, int(progress*100), completed, testCount, foundCount)
-
 			if speed > 0 {
 				foundCount++
 				results = append(results, IPResult{
@@ -254,26 +201,20 @@ func ScanIPs(ips []*net.IPAddr, maxSpeedTests int) []IPResult {
 					DownloadSpeed: speed,
 				})
 			}
+			progress := float64(completed) / float64(testCount)
+			bar := buildProgressBar(int(progress*float64(barWidth)), barWidth)
+			fmt.Printf("\r%s %3d%% (%d/%d) - Found: %d",
+				bar, int(progress*100), completed, testCount, foundCount)
 			mu.Unlock()
-		}(pingResults[i], i)
+		}(pingResults[i])
 	}
 
+waitAndReturn:
 	wg.Wait()
 
 	fmt.Println()
 	fmt.Println()
-	
-	if isInterrupted() {
-		yellow := color.New(color.FgYellow)
-		yellow.Printf("Speed test interrupted: %d clean IPs found so far\n\n", len(results))
-	} else {
-		green := color.New(color.FgGreen)
-		green.Printf("Speed test completed: %d clean IPs found\n\n", len(results))
-	}
-
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Latency < results[j].Latency
-	})
+	color.New(color.FgGreen).Printf("Speed test completed: %d clean IPs found\n\n", len(results))
 
 	return results
 }
