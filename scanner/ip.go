@@ -94,9 +94,7 @@ func (r *IPRanges) chooseIPv4() {
 		minIP, hosts := r.getIPRange()
 		maxIterations := 0
 		for r.ipNet.Contains(r.firstIP) {
-			for i := 0; i < 3; i++ {
-				r.appendIPv4(minIP + randIPEndWith(hosts))
-			}
+			r.appendIPv4(minIP + randIPEndWith(hosts))
 			r.firstIP[14]++
 			if r.firstIP[14] == 0 {
 				r.firstIP[13]++
@@ -143,7 +141,7 @@ func isIPv4(ip string) bool {
 	return strings.Contains(ip, ".")
 }
 
-func GenerateIPs(ranges []string, countPerRange int) []*net.IPAddr {
+func GenerateIPs(ranges []string) []*net.IPAddr {
 	ipRanges := newIPRanges()
 	for _, ipRange := range ranges {
 		ipRange = strings.TrimSpace(ipRange)
