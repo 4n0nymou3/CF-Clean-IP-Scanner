@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/VividCortex/ewma"
@@ -35,12 +34,6 @@ type IPResult struct {
 	IP            *net.IPAddr
 	Latency       int
 	DownloadSpeed float64
-}
-
-var globalDataUsage *int64
-
-func SetGlobalDataUsage(dataUsage *int64) {
-	globalDataUsage = dataUsage
 }
 
 func getDialContext(ip *net.IPAddr) func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -126,9 +119,6 @@ func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string) float64 {
 			e.Add(float64(contentRead-lastContentRead) / (float64(currentTime.Sub(lastTimeSlice)) / float64(timeSlice)))
 		}
 		contentRead += int64(bufferRead)
-		if globalDataUsage != nil {
-			atomic.AddInt64(globalDataUsage, int64(bufferRead))
-		}
 	}
 	
 	if contentRead < 256 {
@@ -161,18 +151,6 @@ func ScanIPs(ips []*net.IPAddr, maxSpeedTests int) []IPResult {
 	if len(pingResults) == 0 {
 		return nil
 	}
-	
-	if isInterrupted() {
-		results := make([]IPResult, len(pingResults))
-		for i, pr := range pingResults {
-			results[i] = IPResult{
-				IP:            pr.IP,
-				Latency:       int(pr.Latency.Milliseconds()),
-				DownloadSpeed: 0,
-			}
-		}
-		return results
-	}
 
 	sort.Slice(pingResults, func(i, j int) bool {
 		return pingResults[i].Latency < pingResults[j].Latency
@@ -203,26 +181,17 @@ func ScanIPs(ips []*net.IPAddr, maxSpeedTests int) []IPResult {
 
 	yellow.Println("Testing download speed...")
 	yellow.Println("This may take a few minutes. Please wait...")
-	yellow.Println("Press Ctrl+C to stop and save current results")
 	fmt.Println()
 
 	barWidth := 50
 
 	for i := 0; i < testCount; i++ {
-		if isInterrupted() {
-			break
-		}
-		
 		wg.Add(1)
 		semaphore <- struct{}{}
 
 		go func(pr PingResult, index int) {
 			defer wg.Done()
 			defer func() { <-semaphore }()
-
-			if isInterrupted() {
-				return
-			}
 
 			speed := testDownloadSpeed(pr.IP)
 
@@ -262,14 +231,8 @@ func ScanIPs(ips []*net.IPAddr, maxSpeedTests int) []IPResult {
 
 	fmt.Println()
 	fmt.Println()
-	
-	if isInterrupted() {
-		yellow := color.New(color.FgYellow)
-		yellow.Printf("Speed test interrupted: %d clean IPs found so far\n\n", len(results))
-	} else {
-		green := color.New(color.FgGreen)
-		green.Printf("Speed test completed: %d clean IPs found\n\n", len(results))
-	}
+	green := color.New(color.FgGreen)
+	green.Printf("Speed test completed: %d clean IPs found\n\n", len(results))
 
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Latency < results[j].Latency
