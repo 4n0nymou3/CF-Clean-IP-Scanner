@@ -83,14 +83,7 @@ jobs:
           cf-scanner
           ```
 
-          ### How it works
-
-          - **Step 1**: Each IP is tested with 4 TCP pings (loss rate + average latency calculated, sorted best-first)
-          - **Step 2**: You choose how many IPs to download speed test (uses speed.cloudflare.com)
-
           Press **Ctrl+C** at any time to stop and see clean IPs found so far.
-
-          Scan duration and data usage are shown at the end of every scan.
 
           ### Requirements
 
