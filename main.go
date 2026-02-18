@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,7 +17,11 @@ import (
 
 const version = "1.3.0"
 
-var interrupted bool
+var (
+	interrupted  bool
+	interruptMux sync.Mutex
+	dataUsage    int64
+)
 
 func main() {
 	maxSpeedTests := 500
@@ -64,7 +69,9 @@ func main() {
 	
 	go func() {
 		<-sigChan
+		interruptMux.Lock()
 		interrupted = true
+		interruptMux.Unlock()
 		yellow := color.New(color.FgYellow, color.Bold)
 		fmt.Println()
 		fmt.Println()
@@ -111,7 +118,9 @@ func main() {
 	
 	cyan.Printf("Total IPs to scan: %d\n\n", len(ips))
 	
-	results, dataUsage := scanner.ScanIPs(ips, maxSpeedTests, &interrupted)
+	scanner.SetGlobalInterruptFlag(&interrupted, &interruptMux)
+	scanner.SetGlobalDataUsage(&dataUsage)
+	results := scanner.ScanIPs(ips, maxSpeedTests)
 	
 	duration := time.Since(startTime)
 	
