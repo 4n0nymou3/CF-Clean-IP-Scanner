@@ -19,49 +19,50 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: write
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-    
+
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
         go-version: '1.23.x'
-    
+
     - name: Get dependencies
       run: |
         go mod download
         go mod tidy
-    
+
     - name: Build for Android ARM64
       run: |
         CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o cf-scanner
-    
+
     - name: Verify build
       run: |
         file cf-scanner
         ls -lh cf-scanner
-    
+
     - name: Create zip file
       run: |
         zip cf-scanner-arm64.zip cf-scanner
-    
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create Release and Upload Asset
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: v${{ github.event.inputs.version }}
-        release_name: v${{ github.event.inputs.version }}
+        name: v${{ github.event.inputs.version }}
+        prerelease: ${{ github.event.inputs.prerelease == 'true' }}
+        files: cf-scanner-arm64.zip
         body: |
           ## CF Clean IP Scanner v${{ github.event.inputs.version }}
-          
+
           **Cloudflare Clean IP Scanner for Termux (Android ARM64)**
-          
+
           ### Installation Method 1: Direct Download (Recommended)
-          
+
           ```bash
           pkg update && pkg upgrade && pkg install wget unzip
           wget https://github.com/${{ github.repository }}/releases/download/v${{ github.event.inputs.version }}/cf-scanner-arm64.zip
@@ -69,46 +70,34 @@ jobs:
           chmod +x cf-scanner
           ./cf-scanner
           ```
-          
+
           ### Installation Method 2: Build from Source
-          
+
           ```bash
           curl -sL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
           ```
-          
+
           ### Usage
-          
+
           ```bash
           cf-scanner
           ```
-          
+
           ### How it works
-          
+
           - **Step 1**: Each IP is tested with 4 TCP pings → loss rate + average latency calculated → sorted best-first
-          - **Step 2**: You choose how many IPs to download speed test → uses `speed.cloudflare.com` for accurate results
-          
-          **Ctrl+C** at any time stops the scan and shows all clean IPs found so far.
-          
+          - **Step 2**: You choose how many IPs to download speed test → uses speed.cloudflare.com for accurate results
+
+          Ctrl+C at any time stops the scan and shows all clean IPs found so far.
+
           At the end of every scan, scan duration and estimated data usage are displayed.
-          
+
           ### Requirements
-          
+
           - Termux (latest version)
           - Android ARM64 device
           - Internet connection
-          
+
           ---
-          
-          Made with ❤️ for Iranian users
-        draft: false
-        prerelease: ${{ github.event.inputs.prerelease == 'true' }}
-    
-    - name: Upload Release Asset
-      uses: actions/upload-release-action@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./cf-scanner-arm64.zip
-        asset_name: cf-scanner-arm64.zip
-        asset_content_type: application/zip
+
+          Made with love for Iranian users
