@@ -46,7 +46,7 @@ func pingIP(ip *net.IPAddr) PingResult {
 	}
 }
 
-func PingIPs(ips []*net.IPAddr) []PingResult {
+func PingIPs(ips []*net.IPAddr, interrupted *bool) []PingResult {
 	var results []PingResult
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -64,12 +64,20 @@ func PingIPs(ips []*net.IPAddr) []PingResult {
 	barWidth := 50
 	
 	for _, ip := range ips {
+		if *interrupted {
+			break
+		}
+		
 		wg.Add(1)
 		semaphore <- struct{}{}
 		
 		go func(ipAddr *net.IPAddr) {
 			defer wg.Done()
 			defer func() { <-semaphore }()
+			
+			if *interrupted {
+				return
+			}
 			
 			result := pingIP(ipAddr)
 			
@@ -105,8 +113,14 @@ func PingIPs(ips []*net.IPAddr) []PingResult {
 	
 	fmt.Println()
 	fmt.Println()
-	green := color.New(color.FgGreen)
-	green.Printf("Latency test completed: %d responsive IPs found\n\n", len(results))
+	
+	if *interrupted {
+		yellow := color.New(color.FgYellow)
+		yellow.Printf("Latency test interrupted: %d responsive IPs found so far\n\n", len(results))
+	} else {
+		green := color.New(color.FgGreen)
+		green.Printf("Latency test completed: %d responsive IPs found\n\n", len(results))
+	}
 	
 	return results
 }
