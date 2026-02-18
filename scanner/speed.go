@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -16,9 +17,10 @@ import (
 
 const (
 	bufferSize      = 1024
-	testURL         = "https://cf.xiu2.xyz/url"
+	downloadURL     = "https://speed.cloudflare.com/__down?bytes=52428800"
 	downloadTimeout = 10 * time.Second
 	defaultTestNum  = 10
+	minSpeed        = 0.0
 )
 
 type IPResult struct {
@@ -52,14 +54,14 @@ func downloadHandler(ip *net.IPAddr, bytesUsed *int64) float64 {
 			if len(via) > 10 {
 				return http.ErrUseLastResponse
 			}
-			if req.Header.Get("Referer") == testURL {
+			if req.Header.Get("Referer") == downloadURL {
 				req.Header.Del("Referer")
 			}
 			return nil
 		},
 	}
 
-	req, err := http.NewRequest("GET", testURL, nil)
+	req, err := http.NewRequest("GET", downloadURL, nil)
 	if err != nil {
 		return 0.0
 	}
@@ -120,20 +122,22 @@ func downloadHandler(ip *net.IPAddr, bytesUsed *int64) float64 {
 
 func SpeedTest(stopCh <-chan struct{}, pingResults []PingResult, bytesUsed *int64) []IPResult {
 	testCount := defaultTestNum
-	testNum := len(pingResults)
-	if testNum < testCount {
+	testNum := testCount
+	if len(pingResults) < testCount {
+		testNum = len(pingResults)
 		testCount = testNum
 	}
 
-	yellow := color.New(color.FgYellow)
-	yellow.Printf("Start download speed test (Number: %d, Queue: %d)\n", testCount, testNum)
-	yellow.Println("Press Ctrl+C at any time to stop and see results found so far.")
-	fmt.Println()
+	barPadding := "     "
+	for i := 0; i < len(strconv.Itoa(len(pingResults))); i++ {
+		barPadding += " "
+	}
 
-	const barWidth = 50
+	color.New(color.FgCyan).Printf("Start download speed test (Minimum speed: %.2f MB/s, Number: %d, Queue: %d)\n", minSpeed, testCount, testNum)
+
+	bar := newBar(testCount, barPadding, "")
+
 	var results []IPResult
-	foundCount := 0
-	tested := 0
 
 	for i := 0; i < testNum; i++ {
 		select {
@@ -144,10 +148,9 @@ func SpeedTest(stopCh <-chan struct{}, pingResults []PingResult, bytesUsed *int6
 
 		pr := pingResults[i]
 		speed := downloadHandler(pr.IP, bytesUsed)
-		tested++
 
-		if speed >= 0.0 && speed > 0 {
-			foundCount++
+		if speed >= minSpeed {
+			bar.grow(1, "")
 			results = append(results, IPResult{
 				IP:            pr.IP,
 				Sended:        pr.Sended,
@@ -156,21 +159,14 @@ func SpeedTest(stopCh <-chan struct{}, pingResults []PingResult, bytesUsed *int6
 				Delay:         int(pr.Delay.Milliseconds()),
 				DownloadSpeed: speed,
 			})
-			if foundCount == testCount {
-				tested = i + 1
-				goto done
+			if len(results) == testCount {
+				break
 			}
 		}
-
-		progress := float64(foundCount) / float64(testCount)
-		bar := buildProgressBar(int(progress*float64(barWidth)), barWidth)
-		fmt.Printf("\r%s  %d/%d  tested: %d",
-			bar, foundCount, testCount, tested)
 	}
 
 done:
-	fmt.Println()
-	fmt.Println()
+	bar.done()
 
 	if len(results) > 0 {
 		sort.Slice(results, func(i, j int) bool {
@@ -178,6 +174,7 @@ done:
 		})
 	}
 
-	color.New(color.FgGreen).Printf("Speed test completed: %d clean IPs found (tested %d IPs)\n\n", len(results), tested)
+	fmt.Println()
+	color.New(color.FgGreen).Printf("Speed test completed: %d clean IPs found\n\n", len(results))
 	return results
 }
