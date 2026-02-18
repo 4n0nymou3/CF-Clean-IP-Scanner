@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,86 +14,72 @@ import (
 )
 
 const (
-	bufferSize       = 8192
-	speedTestTimeout = 25 * time.Second
-	dialTimeout      = 12 * time.Second
-	headerTimeout    = 12 * time.Second
-	tlsTimeout       = 12 * time.Second
-	minValidBytes    = 256
+	downloadURL     = "https://speed.cloudflare.com/__down?bytes=52428800"
+	downloadTimeout = 10 * time.Second
+	bufferSize      = 8192
 )
-
-var speedTestURLs = []string{
-	"https://cloudflare.com/cdn-cgi/trace",
-	"https://www.cloudflare.com/cdn-cgi/trace",
-	"https://1.1.1.1/cdn-cgi/trace",
-	"https://cloudflare-dns.com/",
-	"https://cf.xiu2.xyz/url",
-	"https://www.microsoft.com",
-	"https://www.cloudflare.com/",
-}
 
 type IPResult struct {
 	IP            *net.IPAddr
-	Latency       int
+	Sended        int
+	Received      int
+	LossRate      float32
+	Delay         int
 	DownloadSpeed float64
 }
 
 func getDialContext(ip *net.IPAddr) func(ctx context.Context, network, address string) (net.Conn, error) {
-	var fakeSourceAddr string
+	var addr string
 	if isIPv4(ip.String()) {
-		fakeSourceAddr = fmt.Sprintf("%s:%d", ip.String(), port)
+		addr = fmt.Sprintf("%s:%d", ip.String(), port)
 	} else {
-		fakeSourceAddr = fmt.Sprintf("[%s]:%d", ip.String(), port)
+		addr = fmt.Sprintf("[%s]:%d", ip.String(), port)
 	}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		return (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, network, fakeSourceAddr)
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
 	}
 }
 
-func testDownloadSpeedWithURL(ctx context.Context, ip *net.IPAddr, testURL string, bytesUsed *int64) float64 {
+func downloadSpeed(ctx context.Context, ip *net.IPAddr, bytesUsed *int64) float64 {
 	client := &http.Client{
 		Transport: &http.Transport{
-			DialContext:            getDialContext(ip),
-			DisableKeepAlives:      true,
-			ResponseHeaderTimeout:  headerTimeout,
-			TLSHandshakeTimeout:    tlsTimeout,
-			MaxIdleConns:           1,
-			MaxResponseHeaderBytes: 64 * 1024,
+			DialContext:         getDialContext(ip),
+			DisableKeepAlives:   true,
+			TLSHandshakeTimeout: 10 * time.Second,
 		},
-		Timeout: speedTestTimeout,
+		Timeout: downloadTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
+			if len(via) > 5 {
+				return http.ErrUseLastResponse
+			}
+			return nil
 		},
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
 	if err != nil {
 		return 0.0
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Connection", "close")
 
-	response, err := client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0.0
 	}
-	defer response.Body.Close()
+	defer resp.Body.Close()
 
-	if response.StatusCode != 200 && response.StatusCode != 301 &&
-		response.StatusCode != 302 && response.StatusCode != 204 {
+	if resp.StatusCode != 200 {
 		return 0.0
 	}
 
 	timeStart := time.Now()
-	timeEnd := timeStart.Add(speedTestTimeout)
-
-	contentLength := response.ContentLength
+	timeEnd := timeStart.Add(downloadTimeout)
+	contentLength := resp.ContentLength
 	buffer := make([]byte, bufferSize)
 
 	var (
 		contentRead     int64 = 0
-		timeSlice             = speedTestTimeout / 100
+		timeSlice             = downloadTimeout / 100
 		timeCounter           = 1
 		lastContentRead int64 = 0
 	)
@@ -103,6 +88,9 @@ func testDownloadSpeedWithURL(ctx context.Context, ip *net.IPAddr, testURL strin
 	e := ewma.NewMovingAverage()
 
 	for contentLength != contentRead {
+		if ctx.Err() != nil {
+			break
+		}
 		currentTime := time.Now()
 		if currentTime.After(nextTime) {
 			timeCounter++
@@ -110,107 +98,70 @@ func testDownloadSpeedWithURL(ctx context.Context, ip *net.IPAddr, testURL strin
 			e.Add(float64(contentRead - lastContentRead))
 			lastContentRead = contentRead
 		}
-
 		if currentTime.After(timeEnd) {
 			break
 		}
-
-		bufferRead, err := response.Body.Read(buffer)
+		n, err := resp.Body.Read(buffer)
 		if err != nil {
 			if err != io.EOF {
 				break
 			} else if contentLength == -1 {
 				break
 			}
-			lastTimeSlice := timeStart.Add(timeSlice * time.Duration(timeCounter-1))
-			elapsed := float64(currentTime.Sub(lastTimeSlice)) / float64(timeSlice)
+			lastSlice := timeStart.Add(timeSlice * time.Duration(timeCounter-1))
+			elapsed := float64(currentTime.Sub(lastSlice)) / float64(timeSlice)
 			if elapsed > 0 {
 				e.Add(float64(contentRead-lastContentRead) / elapsed)
 			}
 		}
-		contentRead += int64(bufferRead)
+		contentRead += int64(n)
 	}
 
 	atomic.AddInt64(bytesUsed, contentRead)
-
-	if contentRead < minValidBytes {
-		return 0.0
-	}
-
-	speed := e.Value() / (speedTestTimeout.Seconds() / 120)
-	return speed
-}
-
-func testDownloadSpeed(ctx context.Context, ip *net.IPAddr, bytesUsed *int64) float64 {
-	for _, url := range speedTestURLs {
-		if ctx.Err() != nil {
-			return 0.0
-		}
-		speed := testDownloadSpeedWithURL(ctx, ip, url, bytesUsed)
-		if speed > 0 {
-			return speed
-		}
-	}
-	return 0.0
+	return e.Value() / (downloadTimeout.Seconds() / 120)
 }
 
 func SpeedTest(ctx context.Context, pingResults []PingResult, maxCount int, bytesUsed *int64) []IPResult {
-	var results []IPResult
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
 	testCount := len(pingResults)
 	if testCount > maxCount {
 		testCount = maxCount
 	}
 
-	semaphore := make(chan struct{}, 3)
-
 	yellow := color.New(color.FgYellow)
-	completed := 0
-	foundCount := 0
-
 	yellow.Println("Testing download speed...")
-	yellow.Println("This may take a few minutes. Please wait...")
+	yellow.Printf("Testing top %d IPs (sequential, one at a time for accuracy)\n", testCount)
 	yellow.Println("Press Ctrl+C at any time to stop and see results found so far.")
 	fmt.Println()
 
 	const barWidth = 50
+	var results []IPResult
+	foundCount := 0
 
 	for i := 0; i < testCount; i++ {
-		select {
-		case <-ctx.Done():
-			goto waitAndReturn
-		case semaphore <- struct{}{}:
+		if ctx.Err() != nil {
+			break
 		}
 
-		wg.Add(1)
-		go func(pr PingResult) {
-			defer wg.Done()
-			defer func() { <-semaphore }()
+		pr := pingResults[i]
+		speed := downloadSpeed(ctx, pr.IP, bytesUsed)
 
-			speed := testDownloadSpeed(ctx, pr.IP, bytesUsed)
+		if speed > 0 {
+			foundCount++
+			results = append(results, IPResult{
+				IP:            pr.IP,
+				Sended:        pr.Sended,
+				Received:      pr.Received,
+				LossRate:      pr.GetLossRate(),
+				Delay:         int(pr.Delay.Milliseconds()),
+				DownloadSpeed: speed,
+			})
+		}
 
-			mu.Lock()
-			completed++
-			if speed > 0 {
-				foundCount++
-				results = append(results, IPResult{
-					IP:            pr.IP,
-					Latency:       int(pr.Latency.Milliseconds()),
-					DownloadSpeed: speed,
-				})
-			}
-			progress := float64(completed) / float64(testCount)
-			bar := buildProgressBar(int(progress*float64(barWidth)), barWidth)
-			fmt.Printf("\r%s %3d%% (%d/%d) - Found: %d",
-				bar, int(progress*100), completed, testCount, foundCount)
-			mu.Unlock()
-		}(pingResults[i])
+		progress := float64(i+1) / float64(testCount)
+		bar := buildProgressBar(int(progress*float64(barWidth)), barWidth)
+		fmt.Printf("\r%s %3d%% (%d/%d) - Found: %d",
+			bar, int(progress*100), i+1, testCount, foundCount)
 	}
-
-waitAndReturn:
-	wg.Wait()
 
 	fmt.Println()
 	fmt.Println()
