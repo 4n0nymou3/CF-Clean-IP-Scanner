@@ -64,7 +64,7 @@ func SaveResults(results []scanner.IPResult, filename string) error {
 	file.WriteString(fmt.Sprintf("# Generated at: %s\n", time.Now().Format("2006-01-02 15:04:05")))
 	file.WriteString(fmt.Sprintf("# Total IPs found: %d\n", len(results)))
 	file.WriteString("#\n")
-	file.WriteString("# Format: Rank | IP Address | Sent | Received | Loss Rate | Avg Delay | Download Speed\n")
+	file.WriteString("# Format: Rank | IP | Sent | Received | Loss | Avg Delay | Download Speed\n")
 	file.WriteString("#===========================================================================\n\n")
 
 	for i, r := range results {
