@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/VividCortex/ewma"
@@ -48,7 +49,7 @@ func getDialContext(ip *net.IPAddr) func(ctx context.Context, network, address s
 	}
 }
 
-func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string) float64 {
+func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string, totalBytes *int64) float64 {
 	client := &http.Client{
 		Transport: &http.Transport{
 			DialContext:           getDialContext(ip),
@@ -119,6 +120,7 @@ func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string) float64 {
 			e.Add(float64(contentRead-lastContentRead) / (float64(currentTime.Sub(lastTimeSlice)) / float64(timeSlice)))
 		}
 		contentRead += int64(bufferRead)
+		atomic.AddInt64(totalBytes, int64(bufferRead))
 	}
 	
 	if contentRead < 256 {
@@ -129,9 +131,9 @@ func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string) float64 {
 	return speed
 }
 
-func testDownloadSpeed(ip *net.IPAddr) float64 {
+func testDownloadSpeed(ip *net.IPAddr, totalBytes *int64) float64 {
 	for _, url := range speedTestURLs {
-		speed := testDownloadSpeedWithURL(ip, url)
+		speed := testDownloadSpeedWithURL(ip, url, totalBytes)
 		if speed > 0 {
 			return speed
 		}
@@ -139,17 +141,23 @@ func testDownloadSpeed(ip *net.IPAddr) float64 {
 	return 0.0
 }
 
-func ScanIPs(ips []*net.IPAddr, maxSpeedTests int) []IPResult {
+func ScanIPs(ips []*net.IPAddr, maxSpeedTests int, interrupted *bool) ([]IPResult, int64) {
+	var totalBytes int64
+	
 	cyan := color.New(color.FgCyan, color.Bold)
 	cyan.Println("========================================")
 	cyan.Println("      STEP 1: Latency Testing")
 	cyan.Println("========================================")
 	fmt.Println()
 
-	pingResults := PingIPs(ips)
+	pingResults := PingIPs(ips, interrupted)
 
 	if len(pingResults) == 0 {
-		return nil
+		return nil, totalBytes
+	}
+	
+	if *interrupted {
+		return convertPingToIPResults(pingResults), totalBytes
 	}
 
 	sort.Slice(pingResults, func(i, j int) bool {
@@ -181,11 +189,16 @@ func ScanIPs(ips []*net.IPAddr, maxSpeedTests int) []IPResult {
 
 	yellow.Println("Testing download speed...")
 	yellow.Println("This may take a few minutes. Please wait...")
+	yellow.Println("Press Ctrl+C to stop and save current results")
 	fmt.Println()
 
 	barWidth := 50
 
 	for i := 0; i < testCount; i++ {
+		if *interrupted {
+			break
+		}
+		
 		wg.Add(1)
 		semaphore <- struct{}{}
 
@@ -193,7 +206,11 @@ func ScanIPs(ips []*net.IPAddr, maxSpeedTests int) []IPResult {
 			defer wg.Done()
 			defer func() { <-semaphore }()
 
-			speed := testDownloadSpeed(pr.IP)
+			if *interrupted {
+				return
+			}
+
+			speed := testDownloadSpeed(pr.IP, &totalBytes)
 
 			mu.Lock()
 			completed++
@@ -231,12 +248,30 @@ func ScanIPs(ips []*net.IPAddr, maxSpeedTests int) []IPResult {
 
 	fmt.Println()
 	fmt.Println()
-	green := color.New(color.FgGreen)
-	green.Printf("Speed test completed: %d clean IPs found\n\n", len(results))
+	
+	if *interrupted {
+		yellow := color.New(color.FgYellow)
+		yellow.Printf("Speed test interrupted: %d clean IPs found so far\n\n", len(results))
+	} else {
+		green := color.New(color.FgGreen)
+		green.Printf("Speed test completed: %d clean IPs found\n\n", len(results))
+	}
 
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Latency < results[j].Latency
 	})
 
+	return results, totalBytes
+}
+
+func convertPingToIPResults(pingResults []PingResult) []IPResult {
+	results := make([]IPResult, len(pingResults))
+	for i, pr := range pingResults {
+		results[i] = IPResult{
+			IP:            pr.IP,
+			Latency:       int(pr.Latency.Milliseconds()),
+			DownloadSpeed: 0,
+		}
+	}
 	return results
 }
