@@ -1,18 +1,21 @@
 package scanner
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fatih/color"
 )
 
 const (
-	pingTimeout   = 1 * time.Second
+	pingTimeout   = 2 * time.Second
 	port          = 443
 	maxGoroutines = 100
+	latencyLimit  = 1000 * time.Millisecond
 )
 
 type PingResult struct {
@@ -21,125 +24,78 @@ type PingResult struct {
 	Success bool
 }
 
-var (
-	globalInterrupted    *bool
-	globalInterruptMutex *sync.Mutex
-)
-
-func SetGlobalInterruptFlag(interrupted *bool, mutex *sync.Mutex) {
-	globalInterrupted = interrupted
-	globalInterruptMutex = mutex
-}
-
-func isInterrupted() bool {
-	if globalInterrupted == nil || globalInterruptMutex == nil {
-		return false
-	}
-	globalInterruptMutex.Lock()
-	defer globalInterruptMutex.Unlock()
-	return *globalInterrupted
-}
-
-func pingIP(ip *net.IPAddr) PingResult {
+func pingIP(ctx context.Context, ip *net.IPAddr) PingResult {
 	start := time.Now()
-	
+
 	var fullAddress string
 	if isIPv4(ip.String()) {
 		fullAddress = fmt.Sprintf("%s:%d", ip.String(), port)
 	} else {
 		fullAddress = fmt.Sprintf("[%s]:%d", ip.String(), port)
 	}
-	
-	conn, err := net.DialTimeout("tcp", fullAddress, pingTimeout)
+
+	dialer := &net.Dialer{Timeout: pingTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", fullAddress)
 	if err != nil {
 		return PingResult{IP: ip, Success: false}
 	}
 	defer conn.Close()
-	
+
 	latency := time.Since(start)
-	
-	return PingResult{
-		IP:      ip,
-		Latency: latency,
-		Success: true,
-	}
+	return PingResult{IP: ip, Latency: latency, Success: true}
 }
 
-func PingIPs(ips []*net.IPAddr) []PingResult {
+func PingIPs(ctx context.Context, ips []*net.IPAddr, bytesUsed *int64) []PingResult {
 	var results []PingResult
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	
+
 	semaphore := make(chan struct{}, maxGoroutines)
-	
-	cyan := color.New(color.FgCyan)
 	total := len(ips)
 	completed := 0
 	successCount := 0
-	
+
+	cyan := color.New(color.FgCyan)
 	cyan.Printf("Testing latency for %d IPs...\n", total)
 	fmt.Println()
-	
-	barWidth := 50
-	
+
+	const barWidth = 50
+
 	for _, ip := range ips {
-		if isInterrupted() {
-			break
+		select {
+		case <-ctx.Done():
+			goto waitAndReturn
+		case semaphore <- struct{}{}:
 		}
-		
+
 		wg.Add(1)
-		semaphore <- struct{}{}
-		
 		go func(ipAddr *net.IPAddr) {
 			defer wg.Done()
 			defer func() { <-semaphore }()
-			
-			if isInterrupted() {
-				return
-			}
-			
-			result := pingIP(ipAddr)
-			
+
+			atomic.AddInt64(bytesUsed, 350)
+			result := pingIP(ctx, ipAddr)
+
 			mu.Lock()
 			completed++
-			if result.Success && result.Latency < 500*time.Millisecond {
+			if result.Success && result.Latency < latencyLimit {
 				results = append(results, result)
 				successCount++
 			}
-			
 			progress := float64(completed) / float64(total)
-			filledWidth := int(progress * float64(barWidth))
-			
-			bar := "["
-			for j := 0; j < barWidth; j++ {
-				if j < filledWidth {
-					bar += "="
-				} else if j == filledWidth {
-					bar += ">"
-				} else {
-					bar += " "
-				}
-			}
-			bar += "]"
-			
-			fmt.Printf("\r%s %3d%% (%d/%d) - Found: %d", bar, int(progress*100), completed, total, successCount)
-			
+			bar := buildProgressBar(int(progress*float64(barWidth)), barWidth)
+			fmt.Printf("\r%s %3d%% (%d/%d) - Found: %d",
+				bar, int(progress*100), completed, total, successCount)
 			mu.Unlock()
 		}(ip)
 	}
-	
+
+waitAndReturn:
 	wg.Wait()
-	
+
 	fmt.Println()
 	fmt.Println()
-	
-	if isInterrupted() {
-		yellow := color.New(color.FgYellow)
-		yellow.Printf("Latency test interrupted: %d responsive IPs found so far\n\n", len(results))
-	} else {
-		green := color.New(color.FgGreen)
-		green.Printf("Latency test completed: %d responsive IPs found\n\n", len(results))
-	}
-	
+	color.New(color.FgGreen).Printf("Latency test completed: %d responsive IPs found\n\n", len(results))
+
 	return results
 }
