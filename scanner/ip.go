@@ -6,16 +6,25 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"time"
 )
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
+func buildProgressBar(filled, width int) string {
+	bar := "["
+	for j := 0; j < width; j++ {
+		if j < filled {
+			bar += "="
+		} else if j == filled {
+			bar += ">"
+		} else {
+			bar += " "
+		}
+	}
+	return bar + "]"
 }
 
 func randIPEndWith(num byte) byte {
 	if num == 0 {
-		return byte(0)
+		return 0
 	}
 	return byte(rand.Intn(int(num)))
 }
@@ -139,7 +148,7 @@ func isIPv4(ip string) bool {
 
 func GenerateIPs(ranges []string, countPerRange int) []*net.IPAddr {
 	ipRanges := newIPRanges()
-	
+
 	for _, ipRange := range ranges {
 		ipRange = strings.TrimSpace(ipRange)
 		if ipRange == "" {
@@ -152,6 +161,6 @@ func GenerateIPs(ranges []string, countPerRange int) []*net.IPAddr {
 			ipRanges.chooseIPv6()
 		}
 	}
-	
+
 	return ipRanges.ips
 }
