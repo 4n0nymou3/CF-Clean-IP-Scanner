@@ -1,22 +1,20 @@
 package scanner
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/fatih/color"
 )
 
 const (
-	pingConnectTimeout = 1 * time.Second
-	port               = 443
-	maxRoutines        = 200
-	defaultPingTimes   = 4
+	tcpConnectTimeout = 1 * time.Second
+	port              = 443
+	maxRoutines       = 200
+	defaultPingTimes  = 4
 )
 
 type PingResult struct {
@@ -31,7 +29,7 @@ func (p *PingResult) GetLossRate() float32 {
 	return float32(lost) / float32(p.Sended)
 }
 
-func tcping(ctx context.Context, ip *net.IPAddr) (bool, time.Duration) {
+func tcping(ip *net.IPAddr) (bool, time.Duration) {
 	start := time.Now()
 	var addr string
 	if isIPv4(ip.String()) {
@@ -39,7 +37,7 @@ func tcping(ctx context.Context, ip *net.IPAddr) (bool, time.Duration) {
 	} else {
 		addr = fmt.Sprintf("[%s]:%d", ip.String(), port)
 	}
-	conn, err := (&net.Dialer{Timeout: pingConnectTimeout}).DialContext(ctx, "tcp", addr)
+	conn, err := net.DialTimeout("tcp", addr, tcpConnectTimeout)
 	if err != nil {
 		return false, 0
 	}
@@ -47,7 +45,18 @@ func tcping(ctx context.Context, ip *net.IPAddr) (bool, time.Duration) {
 	return true, time.Since(start)
 }
 
-func PingIPs(ctx context.Context, ips []*net.IPAddr, bytesUsed *int64) []PingResult {
+func checkConnection(ip *net.IPAddr) (recv int, totalDelay time.Duration) {
+	for i := 0; i < defaultPingTimes; i++ {
+		ok, d := tcping(ip)
+		if ok {
+			recv++
+			totalDelay += d
+		}
+	}
+	return
+}
+
+func PingIPs(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 	var results []PingResult
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -65,7 +74,7 @@ func PingIPs(ctx context.Context, ips []*net.IPAddr, bytesUsed *int64) []PingRes
 
 	for _, ip := range ips {
 		select {
-		case <-ctx.Done():
+		case <-stopCh:
 			goto done
 		case control <- struct{}{}:
 		}
@@ -75,30 +84,18 @@ func PingIPs(ctx context.Context, ips []*net.IPAddr, bytesUsed *int64) []PingRes
 			defer wg.Done()
 			defer func() { <-control }()
 
-			var recv int
-			var totalDelay time.Duration
-
-			for i := 0; i < defaultPingTimes; i++ {
-				if ctx.Err() != nil {
-					break
-				}
-				atomic.AddInt64(bytesUsed, 80)
-				ok, d := tcping(ctx, ipAddr)
-				if ok {
-					recv++
-					totalDelay += d
-				}
-			}
+			recv, totalDelay := checkConnection(ipAddr)
 
 			mu.Lock()
 			completed++
 			if recv > 0 {
 				successCount++
+				avg := totalDelay / time.Duration(recv)
 				results = append(results, PingResult{
 					IP:       ipAddr,
 					Sended:   defaultPingTimes,
 					Received: recv,
-					Delay:    totalDelay / time.Duration(recv),
+					Delay:    avg,
 				})
 			}
 			progress := float64(completed) / float64(total)
