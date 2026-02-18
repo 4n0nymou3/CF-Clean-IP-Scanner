@@ -37,6 +37,12 @@ type IPResult struct {
 	DownloadSpeed float64
 }
 
+var globalDataUsage *int64
+
+func SetGlobalDataUsage(dataUsage *int64) {
+	globalDataUsage = dataUsage
+}
+
 func getDialContext(ip *net.IPAddr) func(ctx context.Context, network, address string) (net.Conn, error) {
 	var fakeSourceAddr string
 	if isIPv4(ip.String()) {
@@ -49,7 +55,7 @@ func getDialContext(ip *net.IPAddr) func(ctx context.Context, network, address s
 	}
 }
 
-func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string, totalBytes *int64) float64 {
+func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string) float64 {
 	client := &http.Client{
 		Transport: &http.Transport{
 			DialContext:           getDialContext(ip),
@@ -120,7 +126,9 @@ func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string, totalBytes *int64)
 			e.Add(float64(contentRead-lastContentRead) / (float64(currentTime.Sub(lastTimeSlice)) / float64(timeSlice)))
 		}
 		contentRead += int64(bufferRead)
-		atomic.AddInt64(totalBytes, int64(bufferRead))
+		if globalDataUsage != nil {
+			atomic.AddInt64(globalDataUsage, int64(bufferRead))
+		}
 	}
 	
 	if contentRead < 256 {
@@ -131,9 +139,9 @@ func testDownloadSpeedWithURL(ip *net.IPAddr, testURL string, totalBytes *int64)
 	return speed
 }
 
-func testDownloadSpeed(ip *net.IPAddr, totalBytes *int64) float64 {
+func testDownloadSpeed(ip *net.IPAddr) float64 {
 	for _, url := range speedTestURLs {
-		speed := testDownloadSpeedWithURL(ip, url, totalBytes)
+		speed := testDownloadSpeedWithURL(ip, url)
 		if speed > 0 {
 			return speed
 		}
@@ -141,23 +149,29 @@ func testDownloadSpeed(ip *net.IPAddr, totalBytes *int64) float64 {
 	return 0.0
 }
 
-func ScanIPs(ips []*net.IPAddr, maxSpeedTests int, interrupted *bool) ([]IPResult, int64) {
-	var totalBytes int64
-	
+func ScanIPs(ips []*net.IPAddr, maxSpeedTests int) []IPResult {
 	cyan := color.New(color.FgCyan, color.Bold)
 	cyan.Println("========================================")
 	cyan.Println("      STEP 1: Latency Testing")
 	cyan.Println("========================================")
 	fmt.Println()
 
-	pingResults := PingIPs(ips, interrupted)
+	pingResults := PingIPs(ips)
 
 	if len(pingResults) == 0 {
-		return nil, totalBytes
+		return nil
 	}
 	
-	if *interrupted {
-		return convertPingToIPResults(pingResults), totalBytes
+	if isInterrupted() {
+		results := make([]IPResult, len(pingResults))
+		for i, pr := range pingResults {
+			results[i] = IPResult{
+				IP:            pr.IP,
+				Latency:       int(pr.Latency.Milliseconds()),
+				DownloadSpeed: 0,
+			}
+		}
+		return results
 	}
 
 	sort.Slice(pingResults, func(i, j int) bool {
@@ -195,7 +209,7 @@ func ScanIPs(ips []*net.IPAddr, maxSpeedTests int, interrupted *bool) ([]IPResul
 	barWidth := 50
 
 	for i := 0; i < testCount; i++ {
-		if *interrupted {
+		if isInterrupted() {
 			break
 		}
 		
@@ -206,11 +220,11 @@ func ScanIPs(ips []*net.IPAddr, maxSpeedTests int, interrupted *bool) ([]IPResul
 			defer wg.Done()
 			defer func() { <-semaphore }()
 
-			if *interrupted {
+			if isInterrupted() {
 				return
 			}
 
-			speed := testDownloadSpeed(pr.IP, &totalBytes)
+			speed := testDownloadSpeed(pr.IP)
 
 			mu.Lock()
 			completed++
@@ -249,7 +263,7 @@ func ScanIPs(ips []*net.IPAddr, maxSpeedTests int, interrupted *bool) ([]IPResul
 	fmt.Println()
 	fmt.Println()
 	
-	if *interrupted {
+	if isInterrupted() {
 		yellow := color.New(color.FgYellow)
 		yellow.Printf("Speed test interrupted: %d clean IPs found so far\n\n", len(results))
 	} else {
@@ -261,17 +275,5 @@ func ScanIPs(ips []*net.IPAddr, maxSpeedTests int, interrupted *bool) ([]IPResul
 		return results[i].Latency < results[j].Latency
 	})
 
-	return results, totalBytes
-}
-
-func convertPingToIPResults(pingResults []PingResult) []IPResult {
-	results := make([]IPResult, len(pingResults))
-	for i, pr := range pingResults {
-		results[i] = IPResult{
-			IP:            pr.IP,
-			Latency:       int(pr.Latency.Milliseconds()),
-			DownloadSpeed: 0,
-		}
-	}
 	return results
 }
