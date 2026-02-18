@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -47,8 +48,7 @@ func tcping(ip *net.IPAddr) (bool, time.Duration) {
 
 func checkConnection(ip *net.IPAddr) (recv int, totalDelay time.Duration) {
 	for i := 0; i < defaultPingTimes; i++ {
-		ok, d := tcping(ip)
-		if ok {
+		if ok, d := tcping(ip); ok {
 			recv++
 			totalDelay += d
 		}
@@ -63,14 +63,11 @@ func PingIPs(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 
 	control := make(chan struct{}, maxRoutines)
 	total := len(ips)
-	completed := 0
-	successCount := 0
 
 	cyan := color.New(color.FgCyan)
-	cyan.Printf("Testing latency for %d IPs... (Mode: TCP, Port: %d, Pings per IP: %d)\n", total, port, defaultPingTimes)
-	fmt.Println()
+	cyan.Printf("Start latency test (Mode: TCP, Port: %d, Range: 0 ~ 9999 ms, Packet Loss: 1.00)\n", port)
 
-	const barWidth = 50
+	bar := newBar(total, "Available:", "")
 
 	for _, ip := range ips {
 		select {
@@ -87,9 +84,12 @@ func PingIPs(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 			recv, totalDelay := checkConnection(ipAddr)
 
 			mu.Lock()
-			completed++
+			nowAble := len(results)
+			if recv != 0 {
+				nowAble++
+			}
+			bar.grow(1, strconv.Itoa(nowAble))
 			if recv > 0 {
-				successCount++
 				avg := totalDelay / time.Duration(recv)
 				results = append(results, PingResult{
 					IP:       ipAddr,
@@ -98,20 +98,13 @@ func PingIPs(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 					Delay:    avg,
 				})
 			}
-			progress := float64(completed) / float64(total)
-			bar := buildProgressBar(int(progress*float64(barWidth)), barWidth)
-			fmt.Printf("\r%s %3d%% (%d/%d) - Available: %d",
-				bar, int(progress*100), completed, total, successCount)
 			mu.Unlock()
 		}(ip)
 	}
 
 done:
 	wg.Wait()
-
-	fmt.Println()
-	fmt.Println()
-	color.New(color.FgGreen).Printf("Latency test completed: %d responsive IPs found\n\n", len(results))
+	bar.done()
 
 	sort.Slice(results, func(i, j int) bool {
 		li, lj := results[i].GetLossRate(), results[j].GetLossRate()
@@ -120,6 +113,9 @@ done:
 		}
 		return results[i].Delay < results[j].Delay
 	})
+
+	fmt.Println()
+	color.New(color.FgGreen).Printf("Latency test completed: %d responsive IPs found\n\n", len(results))
 
 	return results
 }
