@@ -1,13 +1,10 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"os/signal"
 	"sort"
-	"strconv"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -53,43 +50,6 @@ func printScanStats(elapsed time.Duration, bytesUsed int64, interrupted bool) {
 	fmt.Println()
 }
 
-func askSpeedTestCount(stopCh <-chan struct{}, max int) (int, bool) {
-	yellow := color.New(color.FgYellow)
-	red := color.New(color.FgRed, color.Bold)
-
-	inputCh := make(chan string, 1)
-	go func() {
-		reader := bufio.NewReader(os.Stdin)
-		for {
-			text, err := reader.ReadString('\n')
-			if err != nil {
-				return
-			}
-			inputCh <- strings.TrimSpace(text)
-		}
-	}()
-
-	for {
-		yellow.Printf("How many of these %d IPs do you want to speed test?\n", max)
-		yellow.Printf("Enter a number between 10 and %d: ", max)
-
-		select {
-		case <-stopCh:
-			fmt.Println()
-			return 0, true
-		case text := <-inputCh:
-			n, err := strconv.Atoi(text)
-			if err != nil || n < 10 || n > max {
-				fmt.Println()
-				red.Printf("Invalid input! Please enter a whole number between 10 and %d.\n", max)
-				fmt.Println()
-				continue
-			}
-			return n, false
-		}
-	}
-}
-
 func main() {
 	utils.PrintHeader()
 	utils.PrintDesigner()
@@ -102,7 +62,7 @@ func main() {
 	yellow := color.New(color.FgYellow)
 	yellow.Println("Optimized for Iran network conditions")
 	yellow.Println("Stage 1 : TCP ping x4 per IP  →  loss rate + avg latency")
-	yellow.Println("Stage 2 : Download speed test  →  speed.cloudflare.com")
+	yellow.Println("Stage 2 : Download speed test  →  stops after finding 10 clean IPs")
 	yellow.Println("Sorted  : loss rate → latency → download speed")
 	fmt.Println()
 
@@ -142,9 +102,8 @@ func main() {
 	select {
 	case <-stopCh:
 		elapsed := time.Since(startTime)
-		fmt.Println()
-		color.New(color.FgYellow).Println("Scan stopped during latency test. No clean IPs to show yet.")
 		pingBytes := int64(len(ips)) * 4 * 80
+		color.New(color.FgYellow).Println("Scan stopped during latency test. No clean IPs to show yet.")
 		printScanStats(elapsed, pingBytes, true)
 		return
 	default:
@@ -168,18 +127,7 @@ func main() {
 	cyanBold.Println("========================================")
 	fmt.Println()
 
-	count, cancelled := askSpeedTestCount(stopCh, len(pingResults))
-	if cancelled {
-		elapsed := time.Since(startTime)
-		color.New(color.FgYellow).Println("Scan stopped before speed test.")
-		pingBytes := int64(len(ips)) * 4 * 80
-		printScanStats(elapsed, pingBytes, true)
-		return
-	}
-
-	color.New(color.FgGreen).Printf("Starting speed test for top %d IPs...\n\n", count)
-
-	results := scanner.SpeedTest(stopCh, pingResults, count, &downloadBytes)
+	results := scanner.SpeedTest(stopCh, pingResults, &downloadBytes)
 
 	elapsed := time.Since(startTime)
 	pingBytes := int64(len(ips)) * 4 * 80
@@ -197,9 +145,9 @@ func main() {
 		if interrupted {
 			red.Println("No clean IPs found before scan was stopped.")
 		} else {
-			red.Println("No clean IPs with download speed > 0 found.")
+			red.Println("No clean IPs found.")
 			fmt.Println()
-			yellow.Println("Try again at a different time, or increase the number of IPs tested.")
+			yellow.Println("Try running again at a different time.")
 		}
 		printScanStats(elapsed, totalBytes, interrupted)
 		return
