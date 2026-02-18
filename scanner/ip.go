@@ -8,20 +8,6 @@ import (
 	"strings"
 )
 
-func buildProgressBar(filled, width int) string {
-	bar := "["
-	for j := 0; j < width; j++ {
-		if j < filled {
-			bar += "="
-		} else if j == filled {
-			bar += ">"
-		} else {
-			bar += " "
-		}
-	}
-	return bar + "]"
-}
-
 func randIPEndWith(num byte) byte {
 	if num == 0 {
 		return 0
