@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,37 +13,38 @@ import (
 )
 
 const (
-	pingTimeout   = 2 * time.Second
-	port          = 443
-	maxGoroutines = 100
-	latencyLimit  = 1000 * time.Millisecond
+	pingConnectTimeout = 1 * time.Second
+	port               = 443
+	maxRoutines        = 200
+	defaultPingTimes   = 4
 )
 
 type PingResult struct {
-	IP      *net.IPAddr
-	Latency time.Duration
-	Success bool
+	IP       *net.IPAddr
+	Sended   int
+	Received int
+	Delay    time.Duration
 }
 
-func pingIP(ctx context.Context, ip *net.IPAddr) PingResult {
+func (p *PingResult) GetLossRate() float32 {
+	lost := p.Sended - p.Received
+	return float32(lost) / float32(p.Sended)
+}
+
+func tcping(ctx context.Context, ip *net.IPAddr) (bool, time.Duration) {
 	start := time.Now()
-
-	var fullAddress string
+	var addr string
 	if isIPv4(ip.String()) {
-		fullAddress = fmt.Sprintf("%s:%d", ip.String(), port)
+		addr = fmt.Sprintf("%s:%d", ip.String(), port)
 	} else {
-		fullAddress = fmt.Sprintf("[%s]:%d", ip.String(), port)
+		addr = fmt.Sprintf("[%s]:%d", ip.String(), port)
 	}
-
-	dialer := &net.Dialer{Timeout: pingTimeout}
-	conn, err := dialer.DialContext(ctx, "tcp", fullAddress)
+	conn, err := (&net.Dialer{Timeout: pingConnectTimeout}).DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return PingResult{IP: ip, Success: false}
+		return false, 0
 	}
-	defer conn.Close()
-
-	latency := time.Since(start)
-	return PingResult{IP: ip, Latency: latency, Success: true}
+	conn.Close()
+	return true, time.Since(start)
 }
 
 func PingIPs(ctx context.Context, ips []*net.IPAddr, bytesUsed *int64) []PingResult {
@@ -50,13 +52,13 @@ func PingIPs(ctx context.Context, ips []*net.IPAddr, bytesUsed *int64) []PingRes
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	semaphore := make(chan struct{}, maxGoroutines)
+	control := make(chan struct{}, maxRoutines)
 	total := len(ips)
 	completed := 0
 	successCount := 0
 
 	cyan := color.New(color.FgCyan)
-	cyan.Printf("Testing latency for %d IPs...\n", total)
+	cyan.Printf("Testing latency for %d IPs... (Mode: TCP, Port: %d, Pings per IP: %d)\n", total, port, defaultPingTimes)
 	fmt.Println()
 
 	const barWidth = 50
@@ -64,38 +66,63 @@ func PingIPs(ctx context.Context, ips []*net.IPAddr, bytesUsed *int64) []PingRes
 	for _, ip := range ips {
 		select {
 		case <-ctx.Done():
-			goto waitAndReturn
-		case semaphore <- struct{}{}:
+			goto done
+		case control <- struct{}{}:
 		}
 
 		wg.Add(1)
 		go func(ipAddr *net.IPAddr) {
 			defer wg.Done()
-			defer func() { <-semaphore }()
+			defer func() { <-control }()
 
-			atomic.AddInt64(bytesUsed, 350)
-			result := pingIP(ctx, ipAddr)
+			var recv int
+			var totalDelay time.Duration
+
+			for i := 0; i < defaultPingTimes; i++ {
+				if ctx.Err() != nil {
+					break
+				}
+				atomic.AddInt64(bytesUsed, 80)
+				ok, d := tcping(ctx, ipAddr)
+				if ok {
+					recv++
+					totalDelay += d
+				}
+			}
 
 			mu.Lock()
 			completed++
-			if result.Success && result.Latency < latencyLimit {
-				results = append(results, result)
+			if recv > 0 {
 				successCount++
+				results = append(results, PingResult{
+					IP:       ipAddr,
+					Sended:   defaultPingTimes,
+					Received: recv,
+					Delay:    totalDelay / time.Duration(recv),
+				})
 			}
 			progress := float64(completed) / float64(total)
 			bar := buildProgressBar(int(progress*float64(barWidth)), barWidth)
-			fmt.Printf("\r%s %3d%% (%d/%d) - Found: %d",
+			fmt.Printf("\r%s %3d%% (%d/%d) - Available: %d",
 				bar, int(progress*100), completed, total, successCount)
 			mu.Unlock()
 		}(ip)
 	}
 
-waitAndReturn:
+done:
 	wg.Wait()
 
 	fmt.Println()
 	fmt.Println()
 	color.New(color.FgGreen).Printf("Latency test completed: %d responsive IPs found\n\n", len(results))
+
+	sort.Slice(results, func(i, j int) bool {
+		li, lj := results[i].GetLossRate(), results[j].GetLossRate()
+		if li != lj {
+			return li < lj
+		}
+		return results[i].Delay < results[j].Delay
+	})
 
 	return results
 }
