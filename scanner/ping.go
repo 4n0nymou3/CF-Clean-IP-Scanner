@@ -21,6 +21,25 @@ type PingResult struct {
 	Success bool
 }
 
+var (
+	globalInterrupted    *bool
+	globalInterruptMutex *sync.Mutex
+)
+
+func SetGlobalInterruptFlag(interrupted *bool, mutex *sync.Mutex) {
+	globalInterrupted = interrupted
+	globalInterruptMutex = mutex
+}
+
+func isInterrupted() bool {
+	if globalInterrupted == nil || globalInterruptMutex == nil {
+		return false
+	}
+	globalInterruptMutex.Lock()
+	defer globalInterruptMutex.Unlock()
+	return *globalInterrupted
+}
+
 func pingIP(ip *net.IPAddr) PingResult {
 	start := time.Now()
 	
@@ -46,7 +65,7 @@ func pingIP(ip *net.IPAddr) PingResult {
 	}
 }
 
-func PingIPs(ips []*net.IPAddr, interrupted *bool) []PingResult {
+func PingIPs(ips []*net.IPAddr) []PingResult {
 	var results []PingResult
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -64,7 +83,7 @@ func PingIPs(ips []*net.IPAddr, interrupted *bool) []PingResult {
 	barWidth := 50
 	
 	for _, ip := range ips {
-		if *interrupted {
+		if isInterrupted() {
 			break
 		}
 		
@@ -75,7 +94,7 @@ func PingIPs(ips []*net.IPAddr, interrupted *bool) []PingResult {
 			defer wg.Done()
 			defer func() { <-semaphore }()
 			
-			if *interrupted {
+			if isInterrupted() {
 				return
 			}
 			
@@ -114,7 +133,7 @@ func PingIPs(ips []*net.IPAddr, interrupted *bool) []PingResult {
 	fmt.Println()
 	fmt.Println()
 	
-	if *interrupted {
+	if isInterrupted() {
 		yellow := color.New(color.FgYellow)
 		yellow.Printf("Latency test interrupted: %d responsive IPs found so far\n\n", len(results))
 	} else {
