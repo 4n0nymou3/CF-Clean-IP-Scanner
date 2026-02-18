@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"sort"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -56,17 +55,13 @@ func main() {
 
 	cyan := color.New(color.FgCyan)
 	cyan.Printf("Version: %s\n", version)
-	cyan.Println("Starting Cloudflare Clean IP Scanner...")
 	fmt.Println()
 
-	yellow := color.New(color.FgYellow)
-	yellow.Println("Optimized for Iran network conditions")
-	yellow.Println("Stage 1 : TCP ping x4 per IP  →  loss rate + avg latency")
-	yellow.Println("Stage 2 : Download speed test  →  stops after finding 10 clean IPs")
-	yellow.Println("Sorted  : loss rate → latency → download speed")
+	color.New(color.FgYellow).Println("Optimized for Iran network conditions")
+	color.New(color.FgYellow).Println("Press Ctrl+C at any time to stop and see results found so far.")
 	fmt.Println()
 
-	time.Sleep(1 * time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	stopCh := make(chan struct{})
 	sigChan := make(chan os.Signal, 1)
@@ -74,7 +69,6 @@ func main() {
 	go func() {
 		<-sigChan
 		signal.Reset(os.Interrupt)
-		fmt.Println()
 		fmt.Println()
 		color.New(color.FgYellow, color.Bold).Println("Interrupt received. Stopping scan and collecting results...")
 		close(stopCh)
@@ -84,17 +78,8 @@ func main() {
 	var downloadBytes int64
 
 	ipRanges := config.GetCloudflareRanges()
-	cyan.Printf("IP Ranges: %d\n", len(ipRanges))
-	cyan.Println("Generating IPs from ranges...")
-	fmt.Println()
-
 	ips := scanner.GenerateIPs(ipRanges)
-	cyan.Printf("Total IPs to test: %d\n\n", len(ips))
 
-	cyanBold := color.New(color.FgCyan, color.Bold)
-	cyanBold.Println("========================================")
-	cyanBold.Println("      STEP 1: Latency Testing")
-	cyanBold.Println("========================================")
 	fmt.Println()
 
 	pingResults := scanner.PingIPs(stopCh, ips)
@@ -102,35 +87,29 @@ func main() {
 	select {
 	case <-stopCh:
 		elapsed := time.Since(startTime)
-		pingBytes := int64(len(ips)) * 4 * 80
 		color.New(color.FgYellow).Println("Scan stopped during latency test. No clean IPs to show yet.")
+		pingBytes := int64(len(ips)) * int64(4) * 80
 		printScanStats(elapsed, pingBytes, true)
 		return
 	default:
 	}
 
 	if len(pingResults) == 0 {
-		red := color.New(color.FgRed, color.Bold)
-		red.Println("No responsive IPs found!")
+		color.New(color.FgRed, color.Bold).Println("No responsive IPs found!")
 		fmt.Println()
-		yellow.Println("Try running again. Network conditions may vary.")
+		color.New(color.FgYellow).Println("Try running again. Network conditions may vary.")
 		elapsed := time.Since(startTime)
-		pingBytes := int64(len(ips)) * 4 * 80
+		pingBytes := int64(len(ips)) * int64(4) * 80
 		printScanStats(elapsed, pingBytes, false)
 		return
 	}
 
-	cyan.Printf("Responsive IPs: %d\n\n", len(pingResults))
-
-	cyanBold.Println("========================================")
-	cyanBold.Println("      STEP 2: Download Speed Test")
-	cyanBold.Println("========================================")
 	fmt.Println()
 
 	results := scanner.SpeedTest(stopCh, pingResults, &downloadBytes)
 
 	elapsed := time.Since(startTime)
-	pingBytes := int64(len(ips)) * 4 * 80
+	pingBytes := int64(len(ips)) * int64(4) * 80
 	totalBytes := pingBytes + atomic.LoadInt64(&downloadBytes)
 
 	interrupted := false
@@ -147,15 +126,11 @@ func main() {
 		} else {
 			red.Println("No clean IPs found.")
 			fmt.Println()
-			yellow.Println("Try running again at a different time.")
+			color.New(color.FgYellow).Println("Try running again at a different time.")
 		}
 		printScanStats(elapsed, totalBytes, interrupted)
 		return
 	}
-
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].DownloadSpeed > results[j].DownloadSpeed
-	})
 
 	topResults := results
 	if len(results) > 10 {
