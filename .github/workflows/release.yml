@@ -85,12 +85,12 @@ jobs:
 
           ### How it works
 
-          - **Step 1**: Each IP is tested with 4 TCP pings → loss rate + average latency calculated → sorted best-first
-          - **Step 2**: You choose how many IPs to download speed test → uses speed.cloudflare.com for accurate results
+          - **Step 1**: Each IP is tested with 4 TCP pings (loss rate + average latency calculated, sorted best-first)
+          - **Step 2**: You choose how many IPs to download speed test (uses speed.cloudflare.com)
 
-          Ctrl+C at any time stops the scan and shows all clean IPs found so far.
+          Press **Ctrl+C** at any time to stop and see clean IPs found so far.
 
-          At the end of every scan, scan duration and estimated data usage are displayed.
+          Scan duration and data usage are shown at the end of every scan.
 
           ### Requirements
 
