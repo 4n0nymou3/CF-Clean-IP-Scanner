@@ -74,7 +74,6 @@ func (r *IPRanges) appendIP(ip net.IP) {
 
 func (r *IPRanges) getIPRange() (minIP, hosts byte) {
 	minIP = r.firstIP[15] & r.ipNet.Mask[3]
-
 	m := net.IPv4Mask(255, 255, 255, 255)
 	for i, v := range r.ipNet.Mask {
 		m[i] ^= v
@@ -122,11 +121,9 @@ func (r *IPRanges) chooseIPv6() {
 		for r.ipNet.Contains(r.firstIP) {
 			r.firstIP[15] = randIPEndWith(255)
 			r.firstIP[14] = randIPEndWith(255)
-
 			targetIP := make([]byte, len(r.firstIP))
 			copy(targetIP, r.firstIP)
 			r.appendIP(targetIP)
-
 			for i := 13; i >= 0; i-- {
 				tempIP = r.firstIP[i]
 				r.firstIP[i] += randIPEndWith(255)
@@ -148,7 +145,6 @@ func isIPv4(ip string) bool {
 
 func GenerateIPs(ranges []string, countPerRange int) []*net.IPAddr {
 	ipRanges := newIPRanges()
-
 	for _, ipRange := range ranges {
 		ipRange = strings.TrimSpace(ipRange)
 		if ipRange == "" {
@@ -161,6 +157,5 @@ func GenerateIPs(ranges []string, countPerRange int) []*net.IPAddr {
 			ipRanges.chooseIPv6()
 		}
 	}
-
 	return ipRanges.ips
 }
