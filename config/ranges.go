@@ -4,13 +4,22 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
 func GetCloudflareRanges() []string {
-	file, err := os.Open("config/ip_ranges.txt")
+	exe, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: could not open config/ip_ranges.txt: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: could not determine executable path: %v\n", err)
+		os.Exit(1)
+	}
+	exeDir := filepath.Dir(exe)
+	filePath := filepath.Join(exeDir, "config", "ip_ranges.txt")
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: could not open %s: %v\n", filePath, err)
 		os.Exit(1)
 	}
 	defer file.Close()
@@ -25,7 +34,7 @@ func GetCloudflareRanges() []string {
 		ranges = append(ranges, line)
 	}
 	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading config/ip_ranges.txt: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", filePath, err)
 		os.Exit(1)
 	}
 	return ranges
