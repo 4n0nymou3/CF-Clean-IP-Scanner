@@ -80,7 +80,13 @@ func (r *IPRanges) chooseIPv4() {
 		minIP, hosts := r.getIPRange()
 		maxIterations := 0
 		for r.ipNet.Contains(r.firstIP) {
-			r.appendIPv4(minIP + randIPEndWith(hosts))
+			samplesPerRow := 1
+			if hosts == 255 {
+				samplesPerRow = 16
+			}
+			for i := 0; i < samplesPerRow; i++ {
+				r.appendIPv4(minIP + randIPEndWith(hosts))
+			}
 			r.firstIP[14]++
 			if r.firstIP[14] == 0 {
 				r.firstIP[13]++
