@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
-	"sync/atomic"
 	"time"
 
 	"github.com/VividCortex/ewma"
@@ -44,7 +43,7 @@ func getDialContext(ip *net.IPAddr) func(ctx context.Context, network, address s
 	}
 }
 
-func downloadHandler(ip *net.IPAddr, bytesUsed *int64) float64 {
+func downloadHandler(ip *net.IPAddr) float64 {
 	client := &http.Client{
 		Transport: &http.Transport{
 			DialContext: getDialContext(ip),
@@ -116,11 +115,10 @@ func downloadHandler(ip *net.IPAddr, bytesUsed *int64) float64 {
 		contentRead += int64(n)
 	}
 
-	atomic.AddInt64(bytesUsed, contentRead)
 	return e.Value() / (downloadTimeout.Seconds() / 120)
 }
 
-func SpeedTest(stopCh <-chan struct{}, pingResults []PingResult, bytesUsed *int64) []IPResult {
+func SpeedTest(stopCh <-chan struct{}, pingResults []PingResult) []IPResult {
 	testCount := defaultTestNum
 	testNum := testCount
 	if len(pingResults) < testCount {
@@ -147,7 +145,7 @@ func SpeedTest(stopCh <-chan struct{}, pingResults []PingResult, bytesUsed *int6
 		}
 
 		pr := pingResults[i]
-		speed := downloadHandler(pr.IP, bytesUsed)
+		speed := downloadHandler(pr.IP)
 
 		if speed >= minSpeed {
 			bar.grow(1, "")
