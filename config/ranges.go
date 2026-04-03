@@ -1,21 +1,32 @@
 package config
 
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"strings"
+)
+
 func GetCloudflareRanges() []string {
-	return []string{
-		"173.245.48.0/20",
-		"103.21.244.0/22",
-		"103.22.200.0/22",
-		"103.31.4.0/22",
-		"141.101.64.0/18",
-		"108.162.192.0/18",
-		"190.93.240.0/20",
-		"188.114.96.0/20",
-		"197.234.240.0/22",
-		"198.41.128.0/17",
-		"162.158.0.0/15",
-		"104.16.0.0/13",
-		"104.24.0.0/14",
-		"172.64.0.0/13",
-		"131.0.72.0/22",
+	file, err := os.Open("config/ip_ranges.txt")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: could not open config/ip_ranges.txt: %v\n", err)
+		os.Exit(1)
 	}
+	defer file.Close()
+
+	var ranges []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		ranges = append(ranges, line)
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading config/ip_ranges.txt: %v\n", err)
+		os.Exit(1)
+	}
+	return ranges
 }
