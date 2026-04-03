@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g., 1.5.1)'
+        description: 'Release version (e.g., 1.5.2)'
         required: true
         type: string
       prerelease:
@@ -47,7 +47,7 @@ jobs:
 
     - name: Create zip file
       run: |
-        zip cf-scanner-arm64.zip cf-scanner
+        zip -r cf-scanner-arm64.zip cf-scanner config/
 
     - name: Create Release and Upload Asset
       uses: softprops/action-gh-release@v2
