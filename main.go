@@ -14,7 +14,7 @@ import (
 	"github.com/4n0nymou3/CF-Clean-IP-Scanner/utils"
 )
 
-const version = "1.5.4"
+const version = "1.5.5"
 
 func formatDuration(d time.Duration) string {
 	h := int(d.Hours())
@@ -23,16 +23,7 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
 
-func formatBytes(b int64) string {
-	if b < 1024 {
-		return fmt.Sprintf("%d B", b)
-	} else if b < 1024*1024 {
-		return fmt.Sprintf("%.2f KB", float64(b)/1024)
-	}
-	return fmt.Sprintf("%.2f MB", float64(b)/1024/1024)
-}
-
-func printScanStats(elapsed time.Duration, bytesUsed int64, interrupted bool) {
+func printScanStats(elapsed time.Duration, interrupted bool) {
 	fmt.Println()
 	cyan := color.New(color.FgCyan, color.Bold)
 	cyan.Println("========================================")
@@ -43,9 +34,7 @@ func printScanStats(elapsed time.Duration, bytesUsed int64, interrupted bool) {
 	}
 	cyan.Println("========================================")
 	fmt.Println()
-	info := color.New(color.FgCyan)
-	info.Printf("  Scan Duration : %s\n", formatDuration(elapsed))
-	info.Printf("  Data Used     : %s\n", formatBytes(bytesUsed))
+	color.New(color.FgCyan).Printf("  Scan Duration : %s\n", formatDuration(elapsed))
 	fmt.Println()
 }
 
@@ -63,58 +52,79 @@ func main() {
 
 	time.Sleep(500 * time.Millisecond)
 
-	stopCh := make(chan struct{})
+	stopPingCh := make(chan struct{})
+	stopSpeedCh := make(chan struct{})
+	inSpeedPhase := int32(0)
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
 	go func() {
-		<-sigChan
-		signal.Reset(os.Interrupt)
-		fmt.Println()
-		color.New(color.FgYellow, color.Bold).Println("Interrupt received. Stopping scan and collecting results...")
-		close(stopCh)
+		for {
+			<-sigChan
+			fmt.Println()
+			if atomic.LoadInt32(&inSpeedPhase) == 0 {
+				color.New(color.FgYellow, color.Bold).Println("Interrupt received. Stopping ping phase and proceeding to speed test with IPs found so far...")
+				select {
+				case <-stopPingCh:
+				default:
+					close(stopPingCh)
+				}
+			} else {
+				color.New(color.FgYellow, color.Bold).Println("Interrupt received. Stopping speed test and collecting results...")
+				signal.Reset(os.Interrupt)
+				select {
+				case <-stopSpeedCh:
+				default:
+					close(stopSpeedCh)
+				}
+				return
+			}
+		}
 	}()
 
 	startTime := time.Now()
-	var downloadBytes int64
 
 	ipRanges := config.GetCloudflareRanges()
 	ips := scanner.GenerateIPs(ipRanges)
 
 	fmt.Println()
 
-	pingResults := scanner.PingIPs(stopCh, ips)
+	pingResults := scanner.PingIPs(stopPingCh, ips)
 
+	pingWasStopped := false
 	select {
-	case <-stopCh:
-		elapsed := time.Since(startTime)
-		color.New(color.FgYellow).Println("Scan stopped during latency test. No clean IPs to show yet.")
-		pingBytes := int64(len(ips)) * int64(4) * 80
-		printScanStats(elapsed, pingBytes, true)
-		return
+	case <-stopPingCh:
+		pingWasStopped = true
 	default:
 	}
 
-	if len(pingResults) == 0 {
+	if pingWasStopped && len(pingResults) == 0 {
+		elapsed := time.Since(startTime)
+		color.New(color.FgYellow).Println("Scan stopped during latency test. No responsive IPs found yet.")
+		printScanStats(elapsed, true)
+		return
+	}
+
+	if !pingWasStopped && len(pingResults) == 0 {
 		color.New(color.FgRed, color.Bold).Println("No responsive IPs found!")
 		fmt.Println()
 		color.New(color.FgYellow).Println("Try running again. Network conditions may vary.")
 		elapsed := time.Since(startTime)
-		pingBytes := int64(len(ips)) * int64(4) * 80
-		printScanStats(elapsed, pingBytes, false)
+		printScanStats(elapsed, false)
 		return
 	}
 
 	fmt.Println()
 
-	results := scanner.SpeedTest(stopCh, pingResults, &downloadBytes)
+	atomic.StoreInt32(&inSpeedPhase, 1)
+	results := scanner.SpeedTest(stopSpeedCh, pingResults)
 
 	elapsed := time.Since(startTime)
-	pingBytes := int64(len(ips)) * int64(4) * 80
-	totalBytes := pingBytes + atomic.LoadInt64(&downloadBytes)
 
 	interrupted := false
 	select {
-	case <-stopCh:
+	case <-stopSpeedCh:
 		interrupted = true
 	default:
 	}
@@ -128,7 +138,7 @@ func main() {
 			fmt.Println()
 			color.New(color.FgYellow).Println("Try running again at a different time.")
 		}
-		printScanStats(elapsed, totalBytes, interrupted)
+		printScanStats(elapsed, interrupted)
 		return
 	}
 
@@ -151,5 +161,5 @@ func main() {
 		color.New(color.FgGreen).Printf("Total clean IPs found: %d\n", len(results))
 	}
 
-	printScanStats(elapsed, totalBytes, interrupted)
+	printScanStats(elapsed, interrupted)
 }
