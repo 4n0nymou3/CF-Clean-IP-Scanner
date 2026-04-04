@@ -64,8 +64,10 @@ func PingIPs(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 	control := make(chan struct{}, maxRoutines)
 	total := len(ips)
 
+	timeoutMs := int(tcpConnectTimeout.Milliseconds())
+
 	cyan := color.New(color.FgCyan)
-	cyan.Printf("Start latency test (Mode: TCP, Port: %d, Range: 0 ~ 9999 ms, Packet Loss: 1.00)\n", port)
+	cyan.Printf("Start latency test (Mode: TCP, Port: %d, Range: 0 ~ %d ms, Packet Loss: 1.00)\n", port, timeoutMs)
 
 	bar := newBar(total, "Available:", "")
 
