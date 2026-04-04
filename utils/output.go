@@ -83,3 +83,23 @@ func SaveResults(results []scanner.IPResult, filename string) error {
 	file.WriteString("\n# End of results\n")
 	return nil
 }
+
+func SaveSimpleResults(topResults []scanner.IPResult, pingResults []scanner.PingResult, filename string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	for _, r := range topResults {
+		file.WriteString(r.IP.String() + "\n")
+	}
+
+	file.WriteString("--------------------\n")
+
+	for _, r := range pingResults {
+		file.WriteString(r.IP.String() + "\n")
+	}
+
+	return nil
+}
