@@ -14,7 +14,7 @@ import (
 	"github.com/4n0nymou3/CF-Clean-IP-Scanner/utils"
 )
 
-const version = "1.5.5"
+const version = "1.6.0"
 
 func formatDuration(d time.Duration) string {
 	h := int(d.Hours())
@@ -159,6 +159,12 @@ func main() {
 	} else {
 		color.New(color.FgGreen).Println("Results saved to clean_ips.txt")
 		color.New(color.FgGreen).Printf("Total clean IPs found: %d\n", len(results))
+	}
+
+	if err := utils.SaveSimpleResults(topResults, pingResults, "clean_ips_list.txt"); err != nil {
+		color.New(color.FgRed).Printf("Error saving simple list: %v\n", err)
+	} else {
+		color.New(color.FgGreen).Println("Simple IP list saved to clean_ips_list.txt")
 	}
 
 	printScanStats(elapsed, interrupted)
