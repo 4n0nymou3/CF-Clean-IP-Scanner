@@ -206,12 +206,18 @@ func testSingleViaXray(ip *net.IPAddr) (bool, time.Duration) {
 	}
 
 	start := time.Now()
-	resp, err := httpClient.Get("https://speed.cloudflare.com/__up?bytes=1000")
+	resp, err := httpClient.Get("https://www.gstatic.com/generate_204")
 	if err != nil {
 		cmd.Process.Kill()
 		return false, 0
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != 204 {
+		cmd.Process.Kill()
+		return false, 0
+	}
+
 	io.Copy(io.Discard, resp.Body)
 	elapsed := time.Since(start)
 
