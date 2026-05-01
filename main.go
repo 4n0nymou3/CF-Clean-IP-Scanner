@@ -1,20 +1,22 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/fatih/color"
 	"github.com/4n0nymou3/CF-Clean-IP-Scanner/config"
 	"github.com/4n0nymou3/CF-Clean-IP-Scanner/scanner"
 	"github.com/4n0nymou3/CF-Clean-IP-Scanner/utils"
+	"github.com/fatih/color"
 )
 
-const version = "1.6.0"
+const version = "2.0.0"
 
 func formatDuration(d time.Duration) string {
 	h := int(d.Hours())
@@ -48,6 +50,24 @@ func main() {
 
 	color.New(color.FgYellow).Println("Optimized for Iran network conditions")
 	color.New(color.FgYellow).Println("Press Ctrl+C at any time to stop and see results found so far.")
+	fmt.Println()
+
+	var choice string
+	color.New(color.FgHiCyan).Println("Select scan mode:")
+	fmt.Println("1. Normal Scan")
+	fmt.Println("2. Xray-based Scan")
+	fmt.Print("Choice (1 or 2, press Enter for 1): ")
+
+	reader := bufio.NewReader(os.Stdin)
+	input, _ := reader.ReadString('\n')
+	choice = strings.TrimSpace(input)
+
+	if choice == "2" {
+		color.New(color.FgGreen).Println("Selected: Xray-based Scan")
+	} else {
+		choice = "1"
+		color.New(color.FgGreen).Println("Selected: Normal Scan")
+	}
 	fmt.Println()
 
 	time.Sleep(500 * time.Millisecond)
