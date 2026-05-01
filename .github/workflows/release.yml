@@ -31,7 +31,7 @@ jobs:
       with:
         go-version: '1.23.x'
 
-    - name: Get dependencies
+    - name: Get Go dependencies
       run: |
         go mod download
         go mod tidy
@@ -40,14 +40,76 @@ jobs:
       run: |
         CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o cf-scanner
 
+    - name: Download Xray core latest stable (Android ARM64-v8a)
+      run: |
+        # Get latest release tag from Xray-core
+        LATEST_TAG=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep -o '"tag_name": "[^"]*' | cut -d '"' -f 4)
+        if [ -z "$LATEST_TAG" ]; then
+          echo "Failed to get latest Xray tag"
+          exit 1
+        fi
+        DOWNLOAD_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_TAG}/Xray-android-arm64-v8a.zip"
+        echo "Downloading Xray from $DOWNLOAD_URL"
+        curl -L -o xray-core.zip "$DOWNLOAD_URL"
+        if [ ! -f xray-core.zip ]; then
+          echo "Failed to download Xray"
+          exit 1
+        fi
+        unzip -o xray-core.zip -d xray_temp
+        mkdir -p xray
+        cp xray_temp/xray xray/
+        chmod +x xray/xray
+        rm -rf xray_temp xray-core.zip
+
+    - name: Create config directory and sample config
+      run: |
+        mkdir -p config
+        cat > config/xray_config.json << 'EOF'
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "port": 1080,
+      "protocol": "socks",
+      "settings": { "udp": false },
+      "listen": "127.0.0.1"
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "IP_PLACEHOLDER",
+            "port": 443,
+            "users": [
+              { "id": "your-uuid-here", "encryption": "none", "flow": "xtls-rprx-vision" }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "your-domain.com",
+          "allowInsecure": false
+        }
+      }
+    }
+  ]
+}
+EOF
+
     - name: Verify build
       run: |
         file cf-scanner
-        ls -lh cf-scanner
+        ls -lh cf-scanner xray/xray
 
-    - name: Create zip file
+    - name: Create full zip package with Xray included
       run: |
-        zip -r cf-scanner-arm64.zip cf-scanner config/
+        zip -r cf-scanner-arm64-v${{ github.event.inputs.version }}.zip cf-scanner xray/ config/
 
     - name: Create Release and Upload Asset
       uses: softprops/action-gh-release@v2
@@ -55,42 +117,49 @@ jobs:
         tag_name: v${{ github.event.inputs.version }}
         name: v${{ github.event.inputs.version }}
         prerelease: ${{ github.event.inputs.prerelease == 'true' }}
-        files: cf-scanner-arm64.zip
+        files: cf-scanner-arm64-v${{ github.event.inputs.version }}.zip
         body: |
           ## CF Clean IP Scanner v${{ github.event.inputs.version }}
 
           **Cloudflare Clean IP Scanner for Termux (Android ARM64)**
 
-          ### Installation Method 1: Direct Download (Recommended)
+          ### 🚀 Installation Method 1: Direct Download (Recommended)
 
           ```bash
           pkg update && pkg upgrade && pkg install wget unzip
-          wget https://github.com/${{ github.repository }}/releases/download/v${{ github.event.inputs.version }}/cf-scanner-arm64.zip
-          unzip cf-scanner-arm64.zip
+          wget https://github.com/${{ github.repository }}/releases/download/v${{ github.event.inputs.version }}/cf-scanner-arm64-v${{ github.event.inputs.version }}.zip
+          unzip cf-scanner-arm64-v${{ github.event.inputs.version }}.zip
           chmod +x cf-scanner
           ./cf-scanner
           ```
 
-          ### Installation Method 2: Build from Source
+          ### 🛠️ Installation Method 2: Build from Source (includes Xray)
 
           ```bash
           curl -sL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
           ```
 
-          ### Usage
+          ### 📝 Usage
 
           ```bash
           cf-scanner
           ```
 
+          Then choose:
+          - **1** for normal scan (TCP ping + speed test)
+          - **2** for Xray scan (uses your config in `config/xray_config.json`)
+
           Press **Ctrl+C** at any time to stop and see clean IPs found so far.
 
-          ### Requirements
+          ### 📁 Files after installation
 
-          - Termux (latest version)
-          - Android ARM64 device
-          - Internet connection
+          - `clean_ips.txt` – detailed results
+          - `clean_ips_list.txt` – simple IP list
+          - `config/xray_config.json` – your Xray config (edit before using Xray mode)
+
+          ### ⚠️ Note for Xray mode
+
+          Before using Xray mode, edit `config/xray_config.json` with your real outbound settings (UUID, serverName, etc.). The scanner will automatically replace the IP address.
 
           ---
-
-          Made with love for Iranian users
+          Made with ❤️ for Iranian users
