@@ -188,20 +188,20 @@ func createSocksDialer(socksInfo *xraySocksInfo) (proxy.Dialer, error) {
 	return proxy.SOCKS5("tcp", addr, nil, proxy.Direct)
 }
 
-func testWithXrayInstance(instance *xrayInstance, ip *net.IPAddr, socksInfo *xraySocksInfo, testURL string) (bool, time.Duration, error) {
+func testWithXrayInstance(instance *xrayInstance, ip *net.IPAddr, socksInfo *xraySocksInfo) (bool, time.Duration) {
 	instance.mu.Lock()
 	defer instance.mu.Unlock()
 	newConfig, _, err := createTempConfigWithIP(ip.String(), socksInfo.Port)
 	if err != nil {
-		return false, 0, err
+		return false, 0
 	}
 	if err := os.WriteFile(instance.configFile, []byte(newConfig), 0644); err != nil {
-		return false, 0, err
+		return false, 0
 	}
 	time.Sleep(200 * time.Millisecond)
 	dialer, err := createSocksDialer(socksInfo)
 	if err != nil {
-		return false, 0, err
+		return false, 0
 	}
 	httpClient := &http.Client{
 		Transport: &http.Transport{
@@ -216,20 +216,28 @@ func testWithXrayInstance(instance *xrayInstance, ip *net.IPAddr, socksInfo *xra
 		},
 	}
 	start := time.Now()
-	resp, err := httpClient.Get(testURL)
+	resp, err := httpClient.Get("http://cp.cloudflare.com/generate_204")
 	if err != nil {
-		return false, 0, err
+		return false, 0
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 && resp.StatusCode != 204 {
-		return false, 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return false, 0
 	}
 	io.Copy(io.Discard, resp.Body)
 	elapsed := time.Since(start)
-	return true, elapsed, nil
+	return true, elapsed
 }
 
 func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
+	if _, err := os.Stat("./xray/xray"); os.IsNotExist(err) {
+		color.New(color.FgRed).Println("ERROR: Xray binary not found at ./xray/xray")
+		return nil
+	}
+	if _, err := os.Stat("./config/xray_config.json"); os.IsNotExist(err) {
+		color.New(color.FgRed).Println("ERROR: Xray config not found at ./config/xray_config.json")
+		return nil
+	}
 	var results []PingResult
 	var mu sync.Mutex
 	total := len(ips)
@@ -259,11 +267,13 @@ func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 			socksPort := workerPortBase + workerID
 			originalConfig, socksInfo, err := createTempConfigWithIP("127.0.0.1", socksPort)
 			if err != nil {
+				color.New(color.FgRed).Printf("Worker %d: createTempConfigWithIP error: %v\n", workerID, err)
 				return
 			}
 			defer os.Remove(originalConfig)
 			xrayCmd, cancelFunc, err := startXrayWithConfig(originalConfig)
 			if err != nil {
+				color.New(color.FgRed).Printf("Worker %d: startXrayWithConfig error: %v\n", workerID, err)
 				return
 			}
 			defer cancelFunc()
@@ -282,11 +292,7 @@ func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 				}
 				recv, totalDelay := 0, time.Duration(0)
 				for i := 0; i < defaultPingTimes; i++ {
-					ok, delay, err := testWithXrayInstance(instance, ipAddr, socksInfo, "http://cp.cloudflare.com/generate_204")
-					if err != nil {
-						time.Sleep(100 * time.Millisecond)
-						continue
-					}
+					ok, delay := testWithXrayInstance(instance, ipAddr, socksInfo)
 					if ok {
 						recv++
 						totalDelay += delay
