@@ -161,11 +161,15 @@ func createTempConfigWithIP(ip string, socksPort int) (string, *xraySocksInfo, e
 	if err != nil {
 		return "", nil, err
 	}
-	tempFile := fmt.Sprintf("/tmp/xray_config_%d.json", time.Now().UnixNano())
-	if err := os.WriteFile(tempFile, newData, 0644); err != nil {
-		return "", nil, err
+	tempFile, err := os.CreateTemp("", "xray_config_*.json")
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create temp file: %v", err)
 	}
-	return tempFile, socksInfo, nil
+	defer tempFile.Close()
+	if _, err := tempFile.Write(newData); err != nil {
+		return "", nil, fmt.Errorf("failed to write temp file: %v", err)
+	}
+	return tempFile.Name(), socksInfo, nil
 }
 
 func startXrayWithConfig(configPath string) (*exec.Cmd, context.CancelFunc, error) {
@@ -195,6 +199,7 @@ func testWithXrayInstance(instance *xrayInstance, ip *net.IPAddr, socksInfo *xra
 	if err != nil {
 		return false, 0
 	}
+	defer os.Remove(newConfig)
 	if err := os.WriteFile(instance.configFile, []byte(newConfig), 0644); err != nil {
 		return false, 0
 	}
