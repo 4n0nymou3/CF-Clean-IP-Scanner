@@ -30,7 +30,6 @@ const (
 	xrayTestNum              = 10
 	xrayMinSpeed             = 0.0
 	xrayPort                 = 443
-	socksLocalPortStart      = 11080
 )
 
 type xraySocksInfo struct {
@@ -81,9 +80,13 @@ func findSocksInbound(inbounds []interface{}) (*xraySocksInfo, error) {
 	return nil, fmt.Errorf("no SOCKS inbound found")
 }
 
-func createSocksDialerWithPort(localPort int) (proxy.Dialer, int, error) {
-	listenAddr := fmt.Sprintf("127.0.0.1:%d", localPort)
-	return proxy.SOCKS5("tcp", listenAddr, nil, proxy.Direct), localPort, nil
+func createSocksDialerFromInfo(socksInfo *xraySocksInfo) (proxy.Dialer, error) {
+	addr := fmt.Sprintf("%s:%d", socksInfo.Address, socksInfo.Port)
+	if socksInfo.User != "" && socksInfo.Pass != "" {
+		auth := proxy.Auth{User: socksInfo.User, Password: socksInfo.Pass}
+		return proxy.SOCKS5("tcp", addr, &auth, proxy.Direct)
+	}
+	return proxy.SOCKS5("tcp", addr, nil, proxy.Direct)
 }
 
 func replaceIPInXrayConfig(ip string, socksPort int) (configPath string, socksInfo *xraySocksInfo, err error) {
@@ -166,15 +169,6 @@ func replaceIPInXrayConfig(ip string, socksPort int) (configPath string, socksIn
 		return "", nil, err
 	}
 	return tempFile, socksInfo, nil
-}
-
-func createSocksDialerFromInfo(socksInfo *xraySocksInfo) (proxy.Dialer, error) {
-	addr := fmt.Sprintf("%s:%d", socksInfo.Address, socksInfo.Port)
-	if socksInfo.User != "" && socksInfo.Pass != "" {
-		auth := proxy.Auth{User: socksInfo.User, Password: socksInfo.Pass}
-		return proxy.SOCKS5("tcp", addr, &auth, proxy.Direct)
-	}
-	return proxy.SOCKS5("tcp", addr, nil, proxy.Direct)
 }
 
 func testSingleViaXray(ip *net.IPAddr, socksPort int) (bool, time.Duration) {
