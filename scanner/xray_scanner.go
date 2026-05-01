@@ -3,6 +3,7 @@ package scanner
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/VividCortex/ewma"
 	"github.com/fatih/color"
+	"golang.org/x/net/proxy"
 )
 
 const (
@@ -152,7 +154,7 @@ func createTempConfigWithIP(ip string, socksPort int) (string, *xraySocksInfo, e
 		break
 	}
 	if !found {
-		return "", nil, fmt.Errorf("no suitable outbound (vless/trojan/vmess) with vnext found")
+		return "", nil, fmt.Errorf("no suitable outbound with vnext found")
 	}
 	cfg["outbounds"] = outboundsSlice
 	newData, err := json.MarshalIndent(cfg, "", "  ")
@@ -175,6 +177,15 @@ func startXrayWithConfig(configPath string) (*exec.Cmd, context.CancelFunc, erro
 	}
 	time.Sleep(600 * time.Millisecond)
 	return cmd, cancel, nil
+}
+
+func createSocksDialer(socksInfo *xraySocksInfo) (proxy.Dialer, error) {
+	addr := fmt.Sprintf("%s:%d", socksInfo.Address, socksInfo.Port)
+	if socksInfo.User != "" && socksInfo.Pass != "" {
+		auth := proxy.Auth{User: socksInfo.User, Password: socksInfo.Pass}
+		return proxy.SOCKS5("tcp", addr, &auth, proxy.Direct)
+	}
+	return proxy.SOCKS5("tcp", addr, nil, proxy.Direct)
 }
 
 func testWithXrayInstance(instance *xrayInstance, ip *net.IPAddr, socksInfo *xraySocksInfo, testURL string) (bool, time.Duration, error) {
@@ -218,15 +229,6 @@ func testWithXrayInstance(instance *xrayInstance, ip *net.IPAddr, socksInfo *xra
 	return true, elapsed, nil
 }
 
-func createSocksDialer(socksInfo *xraySocksInfo) (proxy.Dialer, error) {
-	addr := fmt.Sprintf("%s:%d", socksInfo.Address, socksInfo.Port)
-	if socksInfo.User != "" && socksInfo.Pass != "" {
-		auth := proxy.Auth{User: socksInfo.User, Password: socksInfo.Pass}
-		return proxy.SOCKS5("tcp", addr, &auth, proxy.Direct)
-	}
-	return proxy.SOCKS5("tcp", addr, nil, proxy.Direct)
-}
-
 func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 	var results []PingResult
 	var mu sync.Mutex
@@ -238,7 +240,11 @@ func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 	for _, ip := range ips {
 		select {
 		case <-stopCh:
-			goto done
+			close(ipChan)
+			bar.done()
+			fmt.Println()
+			color.New(color.FgYellow).Println("Scan stopped by user during latency test.")
+			return results
 		default:
 			ipChan <- ip
 		}
@@ -304,7 +310,6 @@ func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 			}
 		}(w)
 	}
-done:
 	wg.Wait()
 	bar.done()
 	sort.Slice(results, func(i, j int) bool {
