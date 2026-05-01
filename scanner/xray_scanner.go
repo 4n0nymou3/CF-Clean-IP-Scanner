@@ -1,7 +1,6 @@
 package scanner
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -29,75 +28,170 @@ const (
 	xrayTestNum         = 10
 	xrayMinSpeed        = 0.0
 	xrayPort            = 443
-	xraySocksPort       = 11080
 )
 
-type xrayConfig struct {
-	Inbounds  []interface{} `json:"inbounds"`
-	Outbounds []interface{} `json:"outbounds"`
+type xraySocksInfo struct {
+	Address string
+	Port    int
+	User    string
+	Pass    string
 }
 
-func replaceIPInXrayConfig(ip string) (string, error) {
-	configPath := "./config/xray_config.json"
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return "", err
+func findSocksInbound(inbounds []interface{}) (*xraySocksInfo, error) {
+	for _, in := range inbounds {
+		inMap, ok := in.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		protocol, _ := inMap["protocol"].(string)
+		if protocol != "socks" {
+			continue
+		}
+		listen, _ := inMap["listen"].(string)
+		if listen == "" {
+			listen = "127.0.0.1"
+		}
+		portFloat, ok := inMap["port"].(float64)
+		if !ok {
+			continue
+		}
+		port := int(portFloat)
+		info := &xraySocksInfo{Address: listen, Port: port, User: "", Pass: ""}
+
+		settings, ok := inMap["settings"].(map[string]interface{})
+		if !ok {
+			return info, nil
+		}
+		auth, _ := settings["auth"].(string)
+		if auth == "password" {
+			accounts, _ := settings["accounts"].([]interface{})
+			if len(accounts) > 0 {
+				acc, _ := accounts[0].(map[string]interface{})
+				user, _ := acc["user"].(string)
+				pass, _ := acc["pass"].(string)
+				info.User = user
+				info.Pass = pass
+			}
+		}
+		return info, nil
 	}
+	return nil, fmt.Errorf("no SOCKS inbound found")
+}
+
+func replaceIPInXrayConfig(ip string) (configPath string, socksInfo *xraySocksInfo, err error) {
+	originalPath := "./config/xray_config.json"
+	data, err := os.ReadFile(originalPath)
+	if err != nil {
+		return "", nil, fmt.Errorf("cannot read config: %v", err)
+	}
+
 	var cfg map[string]interface{}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return "", err
+		return "", nil, fmt.Errorf("invalid JSON: %v", err)
 	}
-	outbounds, ok := cfg["outbounds"].([]interface{})
-	if !ok || len(outbounds) == 0 {
-		return "", fmt.Errorf("no outbounds found")
-	}
-	outbound := outbounds[0].(map[string]interface{})
-	settings, ok := outbound["settings"].(map[string]interface{})
+
+	inboundsRaw, ok := cfg["inbounds"]
 	if !ok {
-		return "", fmt.Errorf("outbound settings not found")
+		return "", nil, fmt.Errorf("no 'inbounds' field")
 	}
-	vnext, ok := settings["vnext"].([]interface{})
-	if !ok || len(vnext) == 0 {
-		return "", fmt.Errorf("vnext not found")
+	inboundsSlice, ok := inboundsRaw.([]interface{})
+	if !ok {
+		return "", nil, fmt.Errorf("'inbounds' is not an array")
 	}
-	server := vnext[0].(map[string]interface{})
-	server["address"] = ip
-	server["port"] = float64(xrayPort)
-	settings["vnext"] = vnext
-	outbound["settings"] = settings
-	cfg["outbounds"] = outbounds
+	socksInfo, err = findSocksInbound(inboundsSlice)
+	if err != nil {
+		return "", nil, err
+	}
+
+	outboundsRaw, ok := cfg["outbounds"]
+	if !ok {
+		return "", nil, fmt.Errorf("no 'outbounds' field")
+	}
+	outboundsSlice, ok := outboundsRaw.([]interface{})
+	if !ok {
+		return "", nil, fmt.Errorf("'outbounds' is not an array")
+	}
+
+	found := false
+	for i, out := range outboundsSlice {
+		outMap, ok := out.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		protocol, _ := outMap["protocol"].(string)
+		protocol = strings.ToLower(protocol)
+		if protocol != "vless" && protocol != "trojan" && protocol != "vmess" {
+			continue
+		}
+		settings, ok := outMap["settings"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		vnextRaw, ok := settings["vnext"]
+		if !ok {
+			continue
+		}
+		vnextSlice, ok := vnextRaw.([]interface{})
+		if !ok || len(vnextSlice) == 0 {
+			continue
+		}
+		server, ok := vnextSlice[0].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		server["address"] = ip
+		server["port"] = float64(xrayPort)
+		settings["vnext"] = vnextSlice
+		outMap["settings"] = settings
+		outboundsSlice[i] = outMap
+		found = true
+		break
+	}
+	if !found {
+		return "", nil, fmt.Errorf("no suitable outbound (vless/trojan/vmess) with vnext found")
+	}
+	cfg["outbounds"] = outboundsSlice
+
 	newData, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	tempFile := fmt.Sprintf("/tmp/xray_config_%d.json", time.Now().UnixNano())
 	if err := os.WriteFile(tempFile, newData, 0644); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return tempFile, nil
+	return tempFile, socksInfo, nil
 }
 
-func testViaXray(ip *net.IPAddr) (bool, time.Duration) {
-	configFile, err := replaceIPInXrayConfig(ip.String())
+func createSocksDialer(socksInfo *xraySocksInfo) (proxy.Dialer, error) {
+	addr := fmt.Sprintf("%s:%d", socksInfo.Address, socksInfo.Port)
+	if socksInfo.User != "" && socksInfo.Pass != "" {
+		auth := proxy.Auth{User: socksInfo.User, Password: socksInfo.Pass}
+		return proxy.SOCKS5("tcp", addr, &auth, proxy.Direct)
+	}
+	return proxy.SOCKS5("tcp", addr, nil, proxy.Direct)
+}
+
+func testSingleIPViaXray(ip *net.IPAddr) (bool, time.Duration) {
+	configFile, socksInfo, err := replaceIPInXrayConfig(ip.String())
 	if err != nil {
 		return false, 0
 	}
 	defer os.Remove(configFile)
 
-	xrayBin := "./xray/xray"
 	ctx, cancel := context.WithTimeout(context.Background(), xrayDownloadTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, xrayBin, "run", "-c", configFile)
+	cmd := exec.CommandContext(ctx, "./xray/xray", "run", "-c", configFile)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
 		return false, 0
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 
-	dialer, err := proxy.SOCKS5("tcp", "127.0.0.1:11080", nil, proxy.Direct)
+	dialer, err := createSocksDialer(socksInfo)
 	if err != nil {
 		cmd.Process.Kill()
 		return false, 0
@@ -134,7 +228,7 @@ func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 	total := len(ips)
 
 	cyan := color.New(color.FgCyan)
-	cyan.Printf("Start latency test (Xray mode, Port: %d, Socks: %d)\n", xrayPort, xraySocksPort)
+	cyan.Printf("Start latency test (Xray mode - auto-detects your config)\n")
 
 	bar := newBar(total, "Available:", "")
 
@@ -150,7 +244,7 @@ func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 			defer wg.Done()
 			defer func() { <-control }()
 
-			ok, delay := testViaXray(ipAddr)
+			ok, delay := testSingleIPViaXray(ipAddr)
 			mu.Lock()
 			nowAble := len(results)
 			if ok {
@@ -181,31 +275,29 @@ done:
 
 	fmt.Println()
 	color.New(color.FgGreen).Printf("Latency test completed (Xray): %d responsive IPs found\n\n", len(results))
-
 	return results
 }
 
-func downloadViaXray(ip *net.IPAddr) float64 {
-	configFile, err := replaceIPInXrayConfig(ip.String())
+func downloadSpeedViaXray(ip *net.IPAddr) float64 {
+	configFile, socksInfo, err := replaceIPInXrayConfig(ip.String())
 	if err != nil {
 		return 0.0
 	}
 	defer os.Remove(configFile)
 
-	xrayBin := "./xray/xray"
 	ctx, cancel := context.WithTimeout(context.Background(), xrayDownloadTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, xrayBin, "run", "-c", configFile)
+	cmd := exec.CommandContext(ctx, "./xray/xray", "run", "-c", configFile)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
 		return 0.0
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 
-	dialer, err := proxy.SOCKS5("tcp", "127.0.0.1:11080", nil, proxy.Direct)
+	dialer, err := createSocksDialer(socksInfo)
 	if err != nil {
 		cmd.Process.Kill()
 		return 0.0
@@ -264,18 +356,25 @@ func downloadViaXray(ip *net.IPAddr) float64 {
 		if err != nil {
 			if err != io.EOF {
 				break
-			} else if response.ContentLength == -1 {
+			}
+			if response.ContentLength == -1 {
 				break
 			}
 			lastSlice := timeStart.Add(timeSlice * time.Duration(timeCounter-1))
-			e.Add(float64(contentRead-lastContentRead) / (float64(currentTime.Sub(lastSlice)) / float64(timeSlice)))
+			if currentTime.After(lastSlice) {
+				ratio := float64(currentTime.Sub(lastSlice)) / float64(timeSlice)
+				if ratio > 0 {
+					e.Add(float64(contentRead-lastContentRead) / ratio)
+				}
+			}
 			break
 		}
 		contentRead += int64(n)
 	}
 
 	cmd.Process.Kill()
-	return e.Value() / (xrayDownloadTimeout.Seconds() / 120)
+	avgBytesPerSec := e.Value() * 100 / xrayDownloadTimeout.Seconds()
+	return avgBytesPerSec / (1024 * 1024)
 }
 
 func SpeedTestViaXray(stopCh <-chan struct{}, pingResults []PingResult) []IPResult {
@@ -305,9 +404,9 @@ func SpeedTestViaXray(stopCh <-chan struct{}, pingResults []PingResult) []IPResu
 		}
 
 		pr := pingResults[i]
-		speed := downloadViaXray(pr.IP)
+		speedMBps := downloadSpeedViaXray(pr.IP)
 
-		if speed >= xrayMinSpeed {
+		if speedMBps >= xrayMinSpeed {
 			bar.grow(1, "")
 			results = append(results, IPResult{
 				IP:            pr.IP,
@@ -315,7 +414,7 @@ func SpeedTestViaXray(stopCh <-chan struct{}, pingResults []PingResult) []IPResu
 				Received:      pr.Received,
 				LossRate:      pr.GetLossRate(),
 				Delay:         int(pr.Delay.Milliseconds()),
-				DownloadSpeed: speed,
+				DownloadSpeed: speedMBps * 1024 * 1024,
 			})
 			if len(results) == testCount {
 				break
