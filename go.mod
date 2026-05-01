@@ -6,6 +6,7 @@ require (
 	github.com/VividCortex/ewma v1.2.0
 	github.com/cheggaaa/pb/v3 v3.1.5
 	github.com/fatih/color v1.18.0
+	golang.org/x/net v0.30.0
 )
 
 require (
