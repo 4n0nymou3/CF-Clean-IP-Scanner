@@ -22,14 +22,13 @@ import (
 )
 
 const (
-	xrayBufferSize           = 1024
-	xrayDownloadURL          = "http://ipv4.download.thinkbroadband.com/50MB.zip"
-	xrayPingTestURL          = "https://www.gstatic.com/generate_204"
-	pingTimeout              = 3 * time.Second
-	speedTestTimeout         = 15 * time.Second
-	xrayTestNum              = 10
-	xrayMinSpeed             = 0.0
-	xrayPort                 = 443
+	xrayBufferSize      = 1024
+	xrayDownloadURL     = "https://speed.cloudflare.com/__down?bytes=52428800"
+	xrayDownloadTimeout = 10 * time.Second
+	xrayTestNum         = 10
+	xrayMinSpeed        = 0.0
+	xrayPort            = 443
+	socksLocalPortStart = 11080
 )
 
 type xraySocksInfo struct {
@@ -59,7 +58,6 @@ func findSocksInbound(inbounds []interface{}) (*xraySocksInfo, error) {
 		}
 		port := int(portFloat)
 		info := &xraySocksInfo{Address: listen, Port: port, User: "", Pass: ""}
-
 		settings, ok := inMap["settings"].(map[string]interface{})
 		if !ok {
 			return info, nil
@@ -78,15 +76,6 @@ func findSocksInbound(inbounds []interface{}) (*xraySocksInfo, error) {
 		return info, nil
 	}
 	return nil, fmt.Errorf("no SOCKS inbound found")
-}
-
-func createSocksDialerFromInfo(socksInfo *xraySocksInfo) (proxy.Dialer, error) {
-	addr := fmt.Sprintf("%s:%d", socksInfo.Address, socksInfo.Port)
-	if socksInfo.User != "" && socksInfo.Pass != "" {
-		auth := proxy.Auth{User: socksInfo.User, Password: socksInfo.Pass}
-		return proxy.SOCKS5("tcp", addr, &auth, proxy.Direct)
-	}
-	return proxy.SOCKS5("tcp", addr, nil, proxy.Direct)
 }
 
 func replaceIPInXrayConfig(ip string, socksPort int) (configPath string, socksInfo *xraySocksInfo, err error) {
@@ -112,7 +101,6 @@ func replaceIPInXrayConfig(ip string, socksPort int) (configPath string, socksIn
 		return "", nil, err
 	}
 	socksInfo.Port = socksPort
-
 	outboundsRaw, ok := cfg["outbounds"]
 	if !ok {
 		return "", nil, fmt.Errorf("no 'outbounds' field")
@@ -171,13 +159,22 @@ func replaceIPInXrayConfig(ip string, socksPort int) (configPath string, socksIn
 	return tempFile, socksInfo, nil
 }
 
+func createSocksDialer(socksInfo *xraySocksInfo) (proxy.Dialer, error) {
+	addr := fmt.Sprintf("%s:%d", socksInfo.Address, socksInfo.Port)
+	if socksInfo.User != "" && socksInfo.Pass != "" {
+		auth := proxy.Auth{User: socksInfo.User, Password: socksInfo.Pass}
+		return proxy.SOCKS5("tcp", addr, &auth, proxy.Direct)
+	}
+	return proxy.SOCKS5("tcp", addr, nil, proxy.Direct)
+}
+
 func testSingleViaXray(ip *net.IPAddr, socksPort int) (bool, time.Duration) {
 	configFile, socksInfo, err := replaceIPInXrayConfig(ip.String(), socksPort)
 	if err != nil {
 		return false, 0
 	}
 	defer os.Remove(configFile)
-	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), xrayDownloadTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "./xray/xray", "run", "-c", configFile)
 	var stderr bytes.Buffer
@@ -185,8 +182,8 @@ func testSingleViaXray(ip *net.IPAddr, socksPort int) (bool, time.Duration) {
 	if err := cmd.Start(); err != nil {
 		return false, 0
 	}
-	time.Sleep(300 * time.Millisecond)
-	dialer, err := createSocksDialerFromInfo(socksInfo)
+	time.Sleep(600 * time.Millisecond)
+	dialer, err := createSocksDialer(socksInfo)
 	if err != nil {
 		cmd.Process.Kill()
 		return false, 0
@@ -197,10 +194,10 @@ func testSingleViaXray(ip *net.IPAddr, socksPort int) (bool, time.Duration) {
 				return dialer.Dial(network, addr)
 			},
 		},
-		Timeout: pingTimeout,
+		Timeout: 3 * time.Second,
 	}
 	start := time.Now()
-	resp, err := httpClient.Get(xrayPingTestURL)
+	resp, err := httpClient.Get("https://www.gstatic.com/generate_204")
 	if err != nil {
 		cmd.Process.Kill()
 		return false, 0
@@ -221,10 +218,9 @@ func checkConnectionViaXray(ip *net.IPAddr, socksPort int) (recv int, totalDelay
 		if ok, d := testSingleViaXray(ip, socksPort); ok {
 			recv++
 			totalDelay += d
+		} else {
+			time.Sleep(100 * time.Millisecond)
 		}
-	}
-	if recv == 0 {
-		totalDelay = 10 * time.Second
 	}
 	return
 }
@@ -237,6 +233,8 @@ func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 	total := len(ips)
 	cyan := color.New(color.FgCyan)
 	cyan.Printf("Start latency test (Xray mode - %d attempts per IP)\n", defaultPingTimes)
+	var socksPortCounter int = socksLocalPortStart
+	portMu := sync.Mutex{}
 	bar := newBar(total, "Available:", "")
 	for _, ip := range ips {
 		select {
@@ -248,7 +246,11 @@ func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 		go func(ipAddr *net.IPAddr) {
 			defer wg.Done()
 			defer func() { <-control }()
-			recv, totalDelay := checkConnectionViaXray(ipAddr, 0)
+			portMu.Lock()
+			socksPort := socksPortCounter
+			socksPortCounter++
+			portMu.Unlock()
+			recv, totalDelay := checkConnectionViaXray(ipAddr, socksPort)
 			mu.Lock()
 			nowAble := len(results)
 			if recv > 0 {
@@ -280,14 +282,13 @@ done:
 	return results
 }
 
-func downloadSpeedViaXray(ip *net.IPAddr) float64 {
-	randPort := 20000 + (int(time.Now().UnixNano()) % 40000)
-	configFile, socksInfo, err := replaceIPInXrayConfig(ip.String(), randPort)
+func downloadSpeedViaXray(ip *net.IPAddr, socksPort int) float64 {
+	configFile, socksInfo, err := replaceIPInXrayConfig(ip.String(), socksPort)
 	if err != nil {
 		return 0.0
 	}
 	defer os.Remove(configFile)
-	ctx, cancel := context.WithTimeout(context.Background(), speedTestTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), xrayDownloadTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "./xray/xray", "run", "-c", configFile)
 	var stderr bytes.Buffer
@@ -295,8 +296,8 @@ func downloadSpeedViaXray(ip *net.IPAddr) float64 {
 	if err := cmd.Start(); err != nil {
 		return 0.0
 	}
-	time.Sleep(300 * time.Millisecond)
-	dialer, err := createSocksDialerFromInfo(socksInfo)
+	time.Sleep(600 * time.Millisecond)
+	dialer, err := createSocksDialer(socksInfo)
 	if err != nil {
 		cmd.Process.Kill()
 		return 0.0
@@ -307,14 +308,14 @@ func downloadSpeedViaXray(ip *net.IPAddr) float64 {
 				return dialer.Dial(network, addr)
 			},
 		},
-		Timeout: speedTestTimeout,
+		Timeout: xrayDownloadTimeout,
 	}
 	req, err := http.NewRequest("GET", xrayDownloadURL, nil)
 	if err != nil {
 		cmd.Process.Kill()
 		return 0.0
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.80 Safari/537.36")
 	response, err := httpClient.Do(req)
 	if err != nil {
 		cmd.Process.Kill()
@@ -326,11 +327,11 @@ func downloadSpeedViaXray(ip *net.IPAddr) float64 {
 		return 0.0
 	}
 	timeStart := time.Now()
-	timeEnd := timeStart.Add(speedTestTimeout)
+	timeEnd := timeStart.Add(xrayDownloadTimeout)
 	buffer := make([]byte, xrayBufferSize)
 	var contentRead int64 = 0
 	var lastContentRead int64 = 0
-	timeSlice := speedTestTimeout / 100
+	timeSlice := xrayDownloadTimeout / 100
 	timeCounter := 1
 	nextTime := timeStart.Add(timeSlice * time.Duration(timeCounter))
 	e := ewma.NewMovingAverage()
@@ -353,13 +354,20 @@ func downloadSpeedViaXray(ip *net.IPAddr) float64 {
 			if response.ContentLength == -1 {
 				break
 			}
+			lastSlice := timeStart.Add(timeSlice * time.Duration(timeCounter-1))
+			if currentTime.After(lastSlice) {
+				ratio := float64(currentTime.Sub(lastSlice)) / float64(timeSlice)
+				if ratio > 0 {
+					e.Add(float64(contentRead-lastContentRead) / ratio)
+				}
+			}
 			break
 		}
 		contentRead += int64(n)
 	}
 	cmd.Process.Kill()
-	speedMbps := (float64(contentRead) * 8) / (1024 * 1024) / speedTestTimeout.Seconds()
-	return speedMbps
+	avgBytesPerSec := e.Value() * 100 / xrayDownloadTimeout.Seconds()
+	return avgBytesPerSec / (1024 * 1024)
 }
 
 func SpeedTestViaXray(stopCh <-chan struct{}, pingResults []PingResult) []IPResult {
@@ -376,6 +384,7 @@ func SpeedTestViaXray(stopCh <-chan struct{}, pingResults []PingResult) []IPResu
 	color.New(color.FgCyan).Printf("Start download speed test (Xray mode, Minimum speed: %.2f MB/s, Number: %d, Queue: %d)\n", xrayMinSpeed, testCount, testNum)
 	bar := newBar(testCount, barPadding, "")
 	var results []IPResult
+	portCounter := xrayTestNum + 10000
 	for i := 0; i < testNum; i++ {
 		select {
 		case <-stopCh:
@@ -383,8 +392,9 @@ func SpeedTestViaXray(stopCh <-chan struct{}, pingResults []PingResult) []IPResu
 		default:
 		}
 		pr := pingResults[i]
-		speedMbps := downloadSpeedViaXray(pr.IP)
-		if speedMbps >= xrayMinSpeed {
+		speedMBps := downloadSpeedViaXray(pr.IP, portCounter)
+		portCounter++
+		if speedMBps >= xrayMinSpeed {
 			bar.grow(1, "")
 			results = append(results, IPResult{
 				IP:            pr.IP,
@@ -392,7 +402,7 @@ func SpeedTestViaXray(stopCh <-chan struct{}, pingResults []PingResult) []IPResu
 				Received:      pr.Received,
 				LossRate:      pr.GetLossRate(),
 				Delay:         int(pr.Delay.Milliseconds()),
-				DownloadSpeed: speedMbps * 1024 * 1024,
+				DownloadSpeed: speedMBps * 1024 * 1024,
 			})
 			if len(results) == testCount {
 				break
