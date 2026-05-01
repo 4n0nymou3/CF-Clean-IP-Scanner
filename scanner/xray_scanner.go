@@ -172,7 +172,7 @@ func createSocksDialer(socksInfo *xraySocksInfo) (proxy.Dialer, error) {
 	return proxy.SOCKS5("tcp", addr, nil, proxy.Direct)
 }
 
-func testSingleIPViaXray(ip *net.IPAddr) (bool, time.Duration) {
+func testSingleViaXray(ip *net.IPAddr) (bool, time.Duration) {
 	configFile, socksInfo, err := replaceIPInXrayConfig(ip.String())
 	if err != nil {
 		return false, 0
@@ -219,6 +219,16 @@ func testSingleIPViaXray(ip *net.IPAddr) (bool, time.Duration) {
 	return true, elapsed
 }
 
+func checkConnectionViaXray(ip *net.IPAddr) (recv int, totalDelay time.Duration) {
+	for i := 0; i < defaultPingTimes; i++ {
+		if ok, d := testSingleViaXray(ip); ok {
+			recv++
+			totalDelay += d
+		}
+	}
+	return
+}
+
 func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 	var results []PingResult
 	var mu sync.Mutex
@@ -228,7 +238,7 @@ func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 	total := len(ips)
 
 	cyan := color.New(color.FgCyan)
-	cyan.Printf("Start latency test (Xray mode - auto-detects your config)\n")
+	cyan.Printf("Start latency test (Xray mode - %d attempts per IP)\n", defaultPingTimes)
 
 	bar := newBar(total, "Available:", "")
 
@@ -244,16 +254,17 @@ func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 			defer wg.Done()
 			defer func() { <-control }()
 
-			ok, delay := testSingleIPViaXray(ipAddr)
+			recv, totalDelay := checkConnectionViaXray(ipAddr)
 			mu.Lock()
 			nowAble := len(results)
-			if ok {
+			if recv > 0 {
 				nowAble++
+				avgDelay := totalDelay / time.Duration(recv)
 				results = append(results, PingResult{
 					IP:       ipAddr,
 					Sended:   defaultPingTimes,
-					Received: 1,
-					Delay:    delay,
+					Received: recv,
+					Delay:    avgDelay,
 				})
 			}
 			bar.grow(1, strconv.Itoa(nowAble))
