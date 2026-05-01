@@ -46,24 +46,35 @@ go mod tidy || { echo "✗ Failed to download dependencies"; exit 1; }
 echo "✓ Dependencies ready"
 
 echo ""
-echo "[4/6] Downloading Xray core (latest stable)..."
-XRAY_URL=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep "browser_download_url.*linux-arm64.zip" | cut -d '"' -f 4)
-if [ -z "$XRAY_URL" ]; then
-    echo "✗ Could not find Xray download URL"
-    exit 1
+echo "[4/6] Installing Xray core (latest stable for Android ARM64-v8a)..."
+
+# Check if xray binary already exists (e.g., from direct zip package)
+if [ -f "./xray/xray" ]; then
+    echo "  → Xray binary already present, skipping download."
+else
+    echo "  → Downloading Xray from GitHub..."
+    # Get download URL using GitHub API
+    LATEST_TAG=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep -o '"tag_name": "[^"]*' | cut -d '"' -f 4)
+    if [ -z "$LATEST_TAG" ]; then
+        echo "✗ Could not determine latest Xray tag. Please check your internet connection."
+        exit 1
+    fi
+    DOWNLOAD_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_TAG}/Xray-android-arm64-v8a.zip"
+    echo "  → Downloading from $DOWNLOAD_URL"
+    curl -L -o xray-core.zip "$DOWNLOAD_URL" || { echo "✗ Failed to download Xray"; exit 1; }
+    unzip -o xray-core.zip -d xray_temp || { echo "✗ Failed to unzip Xray"; exit 1; }
+    mkdir -p xray
+    cp xray_temp/xray xray/
+    chmod +x xray/xray
+    rm -rf xray_temp xray-core.zip
 fi
-curl -L -o xray-core.zip "$XRAY_URL"
-unzip -o xray-core.zip -d xray_temp
-mkdir -p xray
-cp xray_temp/xray xray/
-chmod +x xray/xray
-rm -rf xray_temp xray-core.zip
 echo "✓ Xray core installed"
 
 echo ""
-echo "[5/6] Creating Xray config sample..."
+echo "[5/6] Setting up Xray config sample..."
 mkdir -p config
-cat > config/xray_config.json << 'EOF'
+if [ ! -f "config/xray_config.json" ]; then
+    cat > config/xray_config.json << 'EOF'
 {
   "log": { "loglevel": "warning" },
   "inbounds": [
@@ -100,8 +111,11 @@ cat > config/xray_config.json << 'EOF'
   ]
 }
 EOF
-echo "✓ Sample config created at config/xray_config.json"
-echo "  Please edit this file with your own Xray configuration before using Xray mode."
+    echo "✓ Sample config created at config/xray_config.json"
+    echo "  Please edit this file with your own Xray configuration before using Xray mode."
+else
+    echo "✓ Existing xray_config.json found, keeping it."
+fi
 
 echo ""
 echo "[6/6] Building cf-scanner..."
@@ -135,7 +149,7 @@ echo "  You will be asked to choose scan mode:"
 echo "    1) Normal scan (TCP ping + speed test)"
 echo "    2) Xray scan (uses Xray core with your config)"
 echo ""
-echo "  For Xray mode, first edit: ~/CF-Clean-IP-Scanner/config/xray_config.json"
+echo "  For Xray mode, edit: ~/CF-Clean-IP-Scanner/config/xray_config.json"
 echo "  Results saved to: clean_ips.txt and clean_ips_list.txt"
 echo ""
 echo "You can now run: cf-scanner"
