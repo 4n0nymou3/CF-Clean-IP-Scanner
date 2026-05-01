@@ -18,18 +18,25 @@ import (
 
 	"github.com/VividCortex/ewma"
 	"github.com/fatih/color"
-	"golang.org/x/net/proxy"
 )
 
 const (
-	xrayBufferSize      = 1024
-	xrayDownloadURL     = "https://speed.cloudflare.com/__down?bytes=52428800"
-	xrayDownloadTimeout = 10 * time.Second
-	xrayTestNum         = 10
-	xrayMinSpeed        = 0.0
-	xrayPort            = 443
-	socksLocalPortStart = 11080
+	xrayBufferSize          = 1024
+	xrayDownloadURL         = "https://speed.cloudflare.com/__down?bytes=52428800"
+	xrayDownloadTimeout     = 10 * time.Second
+	xrayTestNum             = 10
+	xrayMinSpeed            = 0.0
+	xrayPort                = 443
+	xrayWorkerCount         = 10
 )
+
+type xrayInstance struct {
+	cmd        *exec.Cmd
+	cancelFunc context.CancelFunc
+	configFile string
+	mu         sync.Mutex
+	port       int
+}
 
 type xraySocksInfo struct {
 	Address string
@@ -78,7 +85,7 @@ func findSocksInbound(inbounds []interface{}) (*xraySocksInfo, error) {
 	return nil, fmt.Errorf("no SOCKS inbound found")
 }
 
-func replaceIPInXrayConfig(ip string, socksPort int) (configPath string, socksInfo *xraySocksInfo, err error) {
+func createTempConfigWithIP(ip string, socksPort int) (string, *xraySocksInfo, error) {
 	originalPath := "./config/xray_config.json"
 	data, err := os.ReadFile(originalPath)
 	if err != nil {
@@ -96,7 +103,7 @@ func replaceIPInXrayConfig(ip string, socksPort int) (configPath string, socksIn
 	if !ok {
 		return "", nil, fmt.Errorf("'inbounds' is not an array")
 	}
-	socksInfo, err = findSocksInbound(inboundsSlice)
+	socksInfo, err := findSocksInbound(inboundsSlice)
 	if err != nil {
 		return "", nil, err
 	}
@@ -159,6 +166,58 @@ func replaceIPInXrayConfig(ip string, socksPort int) (configPath string, socksIn
 	return tempFile, socksInfo, nil
 }
 
+func startXrayWithConfig(configPath string) (*exec.Cmd, context.CancelFunc, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(ctx, "./xray/xray", "run", "-c", configPath)
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	time.Sleep(600 * time.Millisecond)
+	return cmd, cancel, nil
+}
+
+func testWithXrayInstance(instance *xrayInstance, ip *net.IPAddr, socksInfo *xraySocksInfo, testURL string) (bool, time.Duration, error) {
+	instance.mu.Lock()
+	defer instance.mu.Unlock()
+	newConfig, _, err := createTempConfigWithIP(ip.String(), socksInfo.Port)
+	if err != nil {
+		return false, 0, err
+	}
+	if err := os.WriteFile(instance.configFile, []byte(newConfig), 0644); err != nil {
+		return false, 0, err
+	}
+	time.Sleep(200 * time.Millisecond)
+	dialer, err := createSocksDialer(socksInfo)
+	if err != nil {
+		return false, 0, err
+	}
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return dialer.Dial(network, addr)
+			},
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+		Timeout: 3 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	start := time.Now()
+	resp, err := httpClient.Get(testURL)
+	if err != nil {
+		return false, 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 && resp.StatusCode != 204 {
+		return false, 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+	io.Copy(io.Discard, resp.Body)
+	elapsed := time.Since(start)
+	return true, elapsed, nil
+}
+
 func createSocksDialer(socksInfo *xraySocksInfo) (proxy.Dialer, error) {
 	addr := fmt.Sprintf("%s:%d", socksInfo.Address, socksInfo.Port)
 	if socksInfo.User != "" && socksInfo.Pass != "" {
@@ -168,104 +227,82 @@ func createSocksDialer(socksInfo *xraySocksInfo) (proxy.Dialer, error) {
 	return proxy.SOCKS5("tcp", addr, nil, proxy.Direct)
 }
 
-func testSingleViaXray(ip *net.IPAddr, socksPort int) (bool, time.Duration) {
-	configFile, socksInfo, err := replaceIPInXrayConfig(ip.String(), socksPort)
-	if err != nil {
-		return false, 0
-	}
-	defer os.Remove(configFile)
-	ctx, cancel := context.WithTimeout(context.Background(), xrayDownloadTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "./xray/xray", "run", "-c", configFile)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		return false, 0
-	}
-	time.Sleep(600 * time.Millisecond)
-	dialer, err := createSocksDialer(socksInfo)
-	if err != nil {
-		cmd.Process.Kill()
-		return false, 0
-	}
-	httpClient := &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialer.Dial(network, addr)
-			},
-		},
-		Timeout: 3 * time.Second,
-	}
-	start := time.Now()
-	resp, err := httpClient.Get("https://www.gstatic.com/generate_204")
-	if err != nil {
-		cmd.Process.Kill()
-		return false, 0
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 204 {
-		cmd.Process.Kill()
-		return false, 0
-	}
-	io.Copy(io.Discard, resp.Body)
-	elapsed := time.Since(start)
-	cmd.Process.Kill()
-	return true, elapsed
-}
-
-func checkConnectionViaXray(ip *net.IPAddr, socksPort int) (recv int, totalDelay time.Duration) {
-	for i := 0; i < defaultPingTimes; i++ {
-		if ok, d := testSingleViaXray(ip, socksPort); ok {
-			recv++
-			totalDelay += d
-		} else {
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-	return
-}
-
 func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 	var results []PingResult
 	var mu sync.Mutex
-	var wg sync.WaitGroup
-	control := make(chan struct{}, maxRoutines)
 	total := len(ips)
 	cyan := color.New(color.FgCyan)
-	cyan.Printf("Start latency test (Xray mode - %d attempts per IP)\n", defaultPingTimes)
-	var socksPortCounter int = socksLocalPortStart
-	portMu := sync.Mutex{}
+	cyan.Printf("Start latency test (Xray mode - %d attempts per IP, %d workers)\n", defaultPingTimes, xrayWorkerCount)
 	bar := newBar(total, "Available:", "")
+	ipChan := make(chan *net.IPAddr, total)
 	for _, ip := range ips {
 		select {
 		case <-stopCh:
 			goto done
-		case control <- struct{}{}:
+		default:
+			ipChan <- ip
 		}
+	}
+	close(ipChan)
+	var wg sync.WaitGroup
+	workerPortBase := 11080
+	for w := 0; w < xrayWorkerCount; w++ {
 		wg.Add(1)
-		go func(ipAddr *net.IPAddr) {
+		go func(workerID int) {
 			defer wg.Done()
-			defer func() { <-control }()
-			portMu.Lock()
-			socksPort := socksPortCounter
-			socksPortCounter++
-			portMu.Unlock()
-			recv, totalDelay := checkConnectionViaXray(ipAddr, socksPort)
-			mu.Lock()
-			nowAble := len(results)
-			if recv > 0 {
-				nowAble++
-				avgDelay := totalDelay / time.Duration(recv)
-				results = append(results, PingResult{
-					IP:       ipAddr,
-					Sended:   defaultPingTimes,
-					Received: recv,
-					Delay:    avgDelay,
-				})
+			socksPort := workerPortBase + workerID
+			originalConfig, socksInfo, err := createTempConfigWithIP("127.0.0.1", socksPort)
+			if err != nil {
+				return
 			}
-			bar.grow(1, strconv.Itoa(nowAble))
-			mu.Unlock()
-		}(ip)
+			defer os.Remove(originalConfig)
+			xrayCmd, cancelFunc, err := startXrayWithConfig(originalConfig)
+			if err != nil {
+				return
+			}
+			defer cancelFunc()
+			defer xrayCmd.Process.Kill()
+			instance := &xrayInstance{
+				cmd:        xrayCmd,
+				cancelFunc: cancelFunc,
+				configFile: originalConfig,
+				port:       socksPort,
+			}
+			for ipAddr := range ipChan {
+				select {
+				case <-stopCh:
+					return
+				default:
+				}
+				recv, totalDelay := 0, time.Duration(0)
+				for i := 0; i < defaultPingTimes; i++ {
+					ok, delay, err := testWithXrayInstance(instance, ipAddr, socksInfo, "http://cp.cloudflare.com/generate_204")
+					if err != nil {
+						time.Sleep(100 * time.Millisecond)
+						continue
+					}
+					if ok {
+						recv++
+						totalDelay += delay
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+				mu.Lock()
+				nowAble := len(results)
+				if recv > 0 {
+					nowAble++
+					avgDelay := totalDelay / time.Duration(recv)
+					results = append(results, PingResult{
+						IP:       ipAddr,
+						Sended:   defaultPingTimes,
+						Received: recv,
+						Delay:    avgDelay,
+					})
+				}
+				bar.grow(1, strconv.Itoa(nowAble))
+				mu.Unlock()
+			}
+		}(w)
 	}
 done:
 	wg.Wait()
@@ -283,7 +320,7 @@ done:
 }
 
 func downloadSpeedViaXray(ip *net.IPAddr, socksPort int) float64 {
-	configFile, socksInfo, err := replaceIPInXrayConfig(ip.String(), socksPort)
+	configFile, socksInfo, err := createTempConfigWithIP(ip.String(), socksPort)
 	if err != nil {
 		return 0.0
 	}
@@ -307,6 +344,7 @@ func downloadSpeedViaXray(ip *net.IPAddr, socksPort int) float64 {
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				return dialer.Dial(network, addr)
 			},
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 		Timeout: xrayDownloadTimeout,
 	}
