@@ -53,12 +53,10 @@ func askScanMode() int {
 		if input == "1" {
 			return 1
 		} else if input == "2" {
-			// Check if xray binary exists
 			if _, err := os.Stat("./xray/xray"); os.IsNotExist(err) {
 				color.New(color.FgRed).Println("Error: Xray binary not found. Please reinstall the tool.")
 				os.Exit(1)
 			}
-			// Check if config exists
 			if _, err := os.Stat("./config/xray_config.json"); os.IsNotExist(err) {
 				color.New(color.FgRed).Println("Error: Xray config not found at config/xray_config.json")
 				color.New(color.FgYellow).Println("Please edit the sample config file first.")
