@@ -10,10 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/4n0nymou3/CF-Clean-IP-Scanner/config"
 	"github.com/4n0nymou3/CF-Clean-IP-Scanner/scanner"
 	"github.com/4n0nymou3/CF-Clean-IP-Scanner/utils"
-	"github.com/fatih/color"
 )
 
 const version = "2.0.0"
@@ -40,6 +40,37 @@ func printScanStats(elapsed time.Duration, interrupted bool) {
 	fmt.Println()
 }
 
+func askScanMode() int {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Println()
+		color.New(color.FgCyan, color.Bold).Println("Select scan mode:")
+		color.New(color.FgWhite).Println("  [1] Normal scan (TCP ping + speed test)")
+		color.New(color.FgWhite).Println("  [2] Xray scan (uses Xray core with your config)")
+		fmt.Print("Enter 1 or 2: ")
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+		if input == "1" {
+			return 1
+		} else if input == "2" {
+			// Check if xray binary exists
+			if _, err := os.Stat("./xray/xray"); os.IsNotExist(err) {
+				color.New(color.FgRed).Println("Error: Xray binary not found. Please reinstall the tool.")
+				os.Exit(1)
+			}
+			// Check if config exists
+			if _, err := os.Stat("./config/xray_config.json"); os.IsNotExist(err) {
+				color.New(color.FgRed).Println("Error: Xray config not found at config/xray_config.json")
+				color.New(color.FgYellow).Println("Please edit the sample config file first.")
+				os.Exit(1)
+			}
+			return 2
+		} else {
+			color.New(color.FgRed).Println("Invalid choice. Please enter 1 or 2.")
+		}
+	}
+}
+
 func main() {
 	utils.PrintHeader()
 	utils.PrintDesigner()
@@ -52,23 +83,7 @@ func main() {
 	color.New(color.FgYellow).Println("Press Ctrl+C at any time to stop and see results found so far.")
 	fmt.Println()
 
-	var choice string
-	color.New(color.FgHiCyan).Println("Select scan mode:")
-	fmt.Println("1. Normal Scan")
-	fmt.Println("2. Xray-based Scan")
-	fmt.Print("Choice (1 or 2, press Enter for 1): ")
-
-	reader := bufio.NewReader(os.Stdin)
-	input, _ := reader.ReadString('\n')
-	choice = strings.TrimSpace(input)
-
-	if choice == "2" {
-		color.New(color.FgGreen).Println("Selected: Xray-based Scan")
-	} else {
-		choice = "1"
-		color.New(color.FgGreen).Println("Selected: Normal Scan")
-	}
-	fmt.Println()
+	mode := askScanMode()
 
 	time.Sleep(500 * time.Millisecond)
 
@@ -110,13 +125,25 @@ func main() {
 
 	fmt.Println()
 
-	pingResults := scanner.PingIPs(stopPingCh, ips)
+	var pingResults []scanner.PingResult
+	var pingWasStopped bool
 
-	pingWasStopped := false
-	select {
-	case <-stopPingCh:
-		pingWasStopped = true
-	default:
+	if mode == 1 {
+		pingResults = scanner.PingIPs(stopPingCh, ips)
+
+		select {
+		case <-stopPingCh:
+			pingWasStopped = true
+		default:
+		}
+	} else {
+		pingResults = scanner.PingIPsViaXray(stopPingCh, ips)
+
+		select {
+		case <-stopPingCh:
+			pingWasStopped = true
+		default:
+		}
 	}
 
 	if pingWasStopped && len(pingResults) == 0 {
@@ -138,7 +165,12 @@ func main() {
 	fmt.Println()
 
 	atomic.StoreInt32(&inSpeedPhase, 1)
-	results := scanner.SpeedTest(stopSpeedCh, pingResults)
+	var results []scanner.IPResult
+	if mode == 1 {
+		results = scanner.SpeedTest(stopSpeedCh, pingResults)
+	} else {
+		results = scanner.SpeedTestViaXray(stopSpeedCh, pingResults)
+	}
 
 	elapsed := time.Since(startTime)
 
