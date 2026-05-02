@@ -40,6 +40,45 @@ type xraySocksInfo struct {
 	Pass    string
 }
 
+var allowedStreamFields = map[string]bool{
+	"network":             true,
+	"security":            true,
+	"tlsSettings":         true,
+	"realitySettings":     true,
+	"wsSettings":          true,
+	"grpcSettings":        true,
+	"tcpSettings":         true,
+	"httpSettings":        true,
+	"quicSettings":        true,
+	"dsSettings":          true,
+	"httpupgradeSettings": true,
+	"splithttpSettings":   true,
+	"sockopt":             true,
+}
+
+func cleanStreamSettings(ss map[string]interface{}) map[string]interface{} {
+	clean := make(map[string]interface{})
+	for k, v := range ss {
+		if allowedStreamFields[k] {
+			clean[k] = v
+		}
+	}
+	return clean
+}
+
+func getDialerProxy(outMap map[string]interface{}) string {
+	ss, ok := outMap["streamSettings"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	sockopt, ok := ss["sockopt"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	dp, _ := sockopt["dialerProxy"].(string)
+	return dp
+}
+
 func createTempConfigWithIP(ip string, socksPort int) (string, *xraySocksInfo, error) {
 	data, err := os.ReadFile("./config/xray_config.json")
 	if err != nil {
@@ -61,9 +100,9 @@ func createTempConfigWithIP(ip string, socksPort int) (string, *xraySocksInfo, e
 	}
 
 	socksInfo := &xraySocksInfo{Address: "127.0.0.1", Port: socksPort}
-	socksFound := false
+	var newInbounds []interface{}
 
-	for i, in := range inboundsSlice {
+	for _, in := range inboundsSlice {
 		inMap, ok := in.(map[string]interface{})
 		if !ok {
 			continue
@@ -72,31 +111,54 @@ func createTempConfigWithIP(ip string, socksPort int) (string, *xraySocksInfo, e
 		if strings.ToLower(protocol) != "socks" {
 			continue
 		}
-		inMap["port"] = float64(socksPort)
-		if listen, ok := inMap["listen"].(string); ok && listen != "" {
-			socksInfo.Address = listen
-		} else {
-			inMap["listen"] = "127.0.0.1"
+
+		cleanInbound := map[string]interface{}{
+			"protocol": "socks",
+			"listen":   "127.0.0.1",
+			"port":     float64(socksPort),
+			"settings": map[string]interface{}{
+				"auth": "noauth",
+				"udp":  true,
+			},
 		}
+
+		if listen, ok := inMap["listen"].(string); ok && listen != "" {
+			cleanInbound["listen"] = listen
+			socksInfo.Address = listen
+		}
+
 		if settings, ok := inMap["settings"].(map[string]interface{}); ok {
 			if auth, _ := settings["auth"].(string); auth == "password" {
 				if accounts, ok := settings["accounts"].([]interface{}); ok && len(accounts) > 0 {
 					if acc, ok := accounts[0].(map[string]interface{}); ok {
-						socksInfo.User, _ = acc["user"].(string)
-						socksInfo.Pass, _ = acc["pass"].(string)
+						user, _ := acc["user"].(string)
+						pass, _ := acc["pass"].(string)
+						if user != "" && pass != "" {
+							socksInfo.User = user
+							socksInfo.Pass = pass
+							cleanInbound["settings"] = map[string]interface{}{
+								"auth": "password",
+								"udp":  true,
+								"accounts": []interface{}{
+									map[string]interface{}{
+										"user": user,
+										"pass": pass,
+									},
+								},
+							}
+						}
 					}
 				}
 			}
 		}
-		inboundsSlice[i] = inMap
-		socksFound = true
+
+		newInbounds = append(newInbounds, cleanInbound)
 		break
 	}
 
-	if !socksFound {
+	if len(newInbounds) == 0 {
 		return "", nil, fmt.Errorf("no SOCKS inbound found in config")
 	}
-	cfg["inbounds"] = inboundsSlice
 
 	outboundsRaw, ok := cfg["outbounds"]
 	if !ok {
@@ -107,79 +169,155 @@ func createTempConfigWithIP(ip string, socksPort int) (string, *xraySocksInfo, e
 		return "", nil, fmt.Errorf("'outbounds' is not an array")
 	}
 
-	ipUpdated := false
-	for i, out := range outboundsSlice {
+	skipProtocols := map[string]bool{
+		"freedom":   true,
+		"blackhole": true,
+		"dns":       true,
+	}
+
+	var proxyOutbound map[string]interface{}
+	outboundsByTag := make(map[string]map[string]interface{})
+
+	for _, out := range outboundsSlice {
 		outMap, ok := out.(map[string]interface{})
 		if !ok {
 			continue
 		}
+		tag, _ := outMap["tag"].(string)
+		if tag != "" {
+			outboundsByTag[tag] = outMap
+		}
 		protocol, _ := outMap["protocol"].(string)
 		protocol = strings.ToLower(protocol)
+		if !skipProtocols[protocol] && proxyOutbound == nil {
+			proxyOutbound = outMap
+		}
+	}
 
-		settings, ok := outMap["settings"].(map[string]interface{})
+	if proxyOutbound == nil {
+		return "", nil, fmt.Errorf("no supported proxy outbound found in config")
+	}
+
+	protocol, _ := proxyOutbound["protocol"].(string)
+	protocol = strings.ToLower(protocol)
+
+	settings, ok := proxyOutbound["settings"].(map[string]interface{})
+	if !ok {
+		return "", nil, fmt.Errorf("proxy outbound has no 'settings' field")
+	}
+
+	ipUpdated := false
+	switch protocol {
+	case "vless", "vmess":
+		vnextRaw, ok := settings["vnext"]
 		if !ok {
-			continue
+			return "", nil, fmt.Errorf("vless/vmess outbound missing 'vnext'")
 		}
-
-		switch protocol {
-		case "vless", "vmess":
-			vnextRaw, ok := settings["vnext"]
-			if !ok {
-				continue
-			}
-			vnextSlice, ok := vnextRaw.([]interface{})
-			if !ok || len(vnextSlice) == 0 {
-				continue
-			}
-			server, ok := vnextSlice[0].(map[string]interface{})
-			if !ok {
-				continue
-			}
-			server["address"] = ip
-			server["port"] = float64(xrayPort)
-			vnextSlice[0] = server
-			settings["vnext"] = vnextSlice
-			outMap["settings"] = settings
-			outboundsSlice[i] = outMap
-			ipUpdated = true
-
-		case "trojan", "shadowsocks":
-			serversRaw, ok := settings["servers"]
-			if !ok {
-				continue
-			}
-			serversSlice, ok := serversRaw.([]interface{})
-			if !ok || len(serversSlice) == 0 {
-				continue
-			}
-			server, ok := serversSlice[0].(map[string]interface{})
-			if !ok {
-				continue
-			}
-			server["address"] = ip
-			server["port"] = float64(xrayPort)
-			serversSlice[0] = server
-			settings["servers"] = serversSlice
-			outMap["settings"] = settings
-			outboundsSlice[i] = outMap
-			ipUpdated = true
+		vnextSlice, ok := vnextRaw.([]interface{})
+		if !ok || len(vnextSlice) == 0 {
+			return "", nil, fmt.Errorf("vless/vmess 'vnext' is empty")
 		}
-
-		if ipUpdated {
-			break
+		server, ok := vnextSlice[0].(map[string]interface{})
+		if !ok {
+			return "", nil, fmt.Errorf("vless/vmess server entry is invalid")
 		}
+		server["address"] = ip
+		server["port"] = float64(xrayPort)
+		vnextSlice[0] = server
+		settings["vnext"] = vnextSlice
+		ipUpdated = true
+
+	case "trojan", "shadowsocks":
+		serversRaw, ok := settings["servers"]
+		if !ok {
+			return "", nil, fmt.Errorf("trojan/shadowsocks outbound missing 'servers'")
+		}
+		serversSlice, ok := serversRaw.([]interface{})
+		if !ok || len(serversSlice) == 0 {
+			return "", nil, fmt.Errorf("trojan/shadowsocks 'servers' is empty")
+		}
+		server, ok := serversSlice[0].(map[string]interface{})
+		if !ok {
+			return "", nil, fmt.Errorf("trojan/shadowsocks server entry is invalid")
+		}
+		server["address"] = ip
+		server["port"] = float64(xrayPort)
+		serversSlice[0] = server
+		settings["servers"] = serversSlice
+		ipUpdated = true
 	}
 
 	if !ipUpdated {
-		return "", nil, fmt.Errorf("no supported outbound found (vless/vmess/trojan/shadowsocks)")
+		return "", nil, fmt.Errorf("unsupported proxy protocol: %s", protocol)
 	}
-	cfg["outbounds"] = outboundsSlice
 
-	cleanCfg := make(map[string]interface{})
-	for _, field := range []string{"log", "inbounds", "outbounds", "routing", "dns", "policy", "stats", "api", "transport"} {
-		if v, exists := cfg[field]; exists {
-			cleanCfg[field] = v
+	cleanedProxy := map[string]interface{}{
+		"protocol": proxyOutbound["protocol"],
+		"settings": settings,
+		"tag":      "proxy",
+	}
+
+	var dialerProxyTag string
+	if ss, ok := proxyOutbound["streamSettings"].(map[string]interface{}); ok {
+		cleanedSS := cleanStreamSettings(ss)
+		cleanedProxy["streamSettings"] = cleanedSS
+		dialerProxyTag = getDialerProxy(cleanedProxy)
+	}
+
+	if mux, ok := proxyOutbound["mux"].(map[string]interface{}); ok {
+		if enabled, _ := mux["enabled"].(bool); !enabled {
+			cleanedProxy["mux"] = map[string]interface{}{"enabled": false}
 		}
+	}
+
+	newOutbounds := []interface{}{
+		cleanedProxy,
+		map[string]interface{}{
+			"protocol": "freedom",
+			"settings": map[string]interface{}{},
+			"tag":      "direct",
+		},
+		map[string]interface{}{
+			"protocol": "blackhole",
+			"settings": map[string]interface{}{
+				"response": map[string]interface{}{"type": "http"},
+			},
+			"tag": "block",
+		},
+	}
+
+	if dialerProxyTag != "" {
+		if refOut, found := outboundsByTag[dialerProxyTag]; found {
+			cleanRef := map[string]interface{}{
+				"protocol": refOut["protocol"],
+				"tag":      dialerProxyTag,
+			}
+			if refSettings, ok := refOut["settings"].(map[string]interface{}); ok {
+				cleanRef["settings"] = refSettings
+			}
+			if refSS, ok := refOut["streamSettings"].(map[string]interface{}); ok {
+				cleanRef["streamSettings"] = cleanStreamSettings(refSS)
+			}
+			newOutbounds = append(newOutbounds, cleanRef)
+		}
+	}
+
+	cleanCfg := map[string]interface{}{
+		"log": map[string]interface{}{
+			"loglevel": "none",
+		},
+		"inbounds":  newInbounds,
+		"outbounds": newOutbounds,
+		"routing": map[string]interface{}{
+			"domainStrategy": "AsIs",
+			"rules": []interface{}{
+				map[string]interface{}{
+					"type":        "field",
+					"outboundTag": "proxy",
+					"network":     "tcp,udp",
+				},
+			},
+		},
 	}
 
 	newData, err := json.MarshalIndent(cleanCfg, "", "  ")
