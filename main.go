@@ -16,7 +16,7 @@ import (
 	"github.com/4n0nymou3/CF-Clean-IP-Scanner/utils"
 )
 
-const version = "2.0.0"
+const version = "2.1.0"
 
 func formatDuration(d time.Duration) string {
 	h := int(d.Hours())
