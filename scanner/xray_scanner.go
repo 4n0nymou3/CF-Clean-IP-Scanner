@@ -28,9 +28,12 @@ const (
 	xrayTestNum         = 10
 	xrayMinSpeed        = 0.0
 	xrayPort            = 443
-	xrayWorkerCount     = 5
-	xrayStartupDelay    = 800 * time.Millisecond
+	xrayWorkerCount     = 8
+	xrayStartupDelay    = 350 * time.Millisecond
 	xrayPortBase        = 11080
+	xrayPingTimes       = 3
+	xrayPingTimeout     = 3 * time.Second
+	xrayPingInterval    = 50 * time.Millisecond
 )
 
 type xraySocksInfo struct {
@@ -118,7 +121,7 @@ func createTempConfigWithIP(ip string, socksPort int) (string, *xraySocksInfo, e
 			"port":     float64(socksPort),
 			"settings": map[string]interface{}{
 				"auth": "noauth",
-				"udp":  true,
+				"udp":  false,
 			},
 		}
 
@@ -138,7 +141,7 @@ func createTempConfigWithIP(ip string, socksPort int) (string, *xraySocksInfo, e
 							socksInfo.Pass = pass
 							cleanInbound["settings"] = map[string]interface{}{
 								"auth": "password",
-								"udp":  true,
+								"udp":  false,
 								"accounts": []interface{}{
 									map[string]interface{}{
 										"user": user,
@@ -378,15 +381,16 @@ func testIPViaXray(ip *net.IPAddr, socksPort int) (recv int, totalDelay time.Dur
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				return dialer.Dial(network, addr)
 			},
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+			DisableKeepAlives: true,
 		},
-		Timeout: 5 * time.Second,
+		Timeout: xrayPingTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 
-	for i := 0; i < defaultPingTimes; i++ {
+	for i := 0; i < xrayPingTimes; i++ {
 		start := time.Now()
 		resp, err := httpClient.Get("https://cp.cloudflare.com/generate_204")
 		if err == nil {
@@ -397,8 +401,8 @@ func testIPViaXray(ip *net.IPAddr, socksPort int) (recv int, totalDelay time.Dur
 				totalDelay += time.Since(start)
 			}
 		}
-		if i < defaultPingTimes-1 {
-			time.Sleep(100 * time.Millisecond)
+		if i < xrayPingTimes-1 {
+			time.Sleep(xrayPingInterval)
 		}
 	}
 	return
@@ -418,7 +422,7 @@ func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 	var mu sync.Mutex
 	total := len(ips)
 
-	color.New(color.FgCyan).Printf("Start latency test (Xray mode - %d attempts per IP, %d workers)\n", defaultPingTimes, xrayWorkerCount)
+	color.New(color.FgCyan).Printf("Start latency test (Xray mode - %d attempts per IP, %d workers)\n", xrayPingTimes, xrayWorkerCount)
 	bar := newBar(total, "Available:", "")
 
 	ipChan := make(chan *net.IPAddr, total)
@@ -454,7 +458,7 @@ func PingIPsViaXray(stopCh <-chan struct{}, ips []*net.IPAddr) []PingResult {
 					avgDelay := totalDelay / time.Duration(recv)
 					results = append(results, PingResult{
 						IP:       ipAddr,
-						Sended:   defaultPingTimes,
+						Sended:   xrayPingTimes,
 						Received: recv,
 						Delay:    avgDelay,
 					})
@@ -511,7 +515,8 @@ func downloadSpeedViaXray(ip *net.IPAddr, socksPort int) float64 {
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				return dialer.Dial(network, addr)
 			},
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+			DisableKeepAlives: true,
 		},
 		Timeout: xrayDownloadTimeout,
 	}
