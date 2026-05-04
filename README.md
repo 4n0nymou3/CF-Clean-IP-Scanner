@@ -401,7 +401,7 @@ rm /data/data/com.termux/files/usr/bin/cf-scanner
 
 سازنده
 
-طراحی و توسعه توسط: Anonymous
+طراحی و توسعه توسط: **Anonymous**
 
 ---
 
@@ -409,7 +409,7 @@ rm /data/data/com.termux/files/usr/bin/cf-scanner
 
 اگر این ابزار برای شما مفید بود:
 
-· ⭐ یک Star به repository بدهید
-· آن را با دوستانتان به اشتراک بگذارید
+- یک Star ⭐ به repository بدهید.
+- آن را با دوستانتان به اشتراک بگذارید.
 
 </div>
