@@ -402,7 +402,6 @@ rm /data/data/com.termux/files/usr/bin/cf-scanner
 سازنده
 
 طراحی و توسعه توسط: Anonymous
-ارتباط: Telegram
 
 ---
 
